@@ -1,60 +1,63 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import polcurvefit as pcf  # Assuming this is how the library is imported
+from polcurvefit import polcurvefit
+import os
 
-def main():
-    st.title("Tafel Plot Deconvolution App with Polcurvefit")
+# Set up the Streamlit app title
+st.title("Electrochemical Data Analysis")
 
-    # Upload data
-    st.sidebar.title("Upload Data")
-    uploaded_file = st.sidebar.file_uploader("Upload a CSV or Excel file", type=["csv", "xlsx"])
+# File uploader widget
+uploaded_file = st.file_uploader("Upload a CSV or Excel file", type=["csv", "xlsx"])
 
-    if uploaded_file:
-        # Read data depending on file type
-        if uploaded_file.name.endswith('.xlsx'):
-            data = pd.read_excel(uploaded_file)
-        else:
-            data = pd.read_csv(uploaded_file)
+# Directory where plots are saved
+plot_output_folder = 'Visualization_activation_control_fit'
+os.makedirs(plot_output_folder, exist_ok=True)
 
-        # Use specific column names from the provided data structure
-        potential = data['Potential applied (V)'].values
-        current_density = data['WE(1).Current (A)'].values
+if uploaded_file is not None:
+    try:
+        # Read the uploaded CSV or Excel file
+        if uploaded_file.name.endswith(".csv"):
+            df = pd.read_csv(uploaded_file)
+        elif uploaded_file.name.endswith(".xlsx"):
+            df = pd.read_excel(uploaded_file)
+
+        # Display the uploaded data
+        st.write("Uploaded Data:")
+        st.dataframe(df)
+
+        # Extract potential and current columns
+        potential_column = df.columns[0]
+        current_column = df.columns[2]
+
+        E = df[potential_column].values
+        I = df[current_column].values
+
+        # Initialize polcurvefit with the loaded data
+        Polcurve = polcurvefit(E, I, sample_surface=1E-4)
         
-        # Logarithm of current density for plotting
-        log_current_density = np.log10(np.abs(current_density))
+        # Perform the active polarization curve fit
+        popt, E_corr, I_corr, anodic_slope, cathodic_slope, r_square = Polcurve.active_pol_fit(window=[-0.07, 0.07])
 
-        # Plot the data
-        fig, ax = plt.subplots()
-        ax.plot(potential, log_current_density, label='Experimental Data', marker='o', linestyle='')
+        # Display results
+        st.write("Fitted Parameters:")
+        st.write(f"Fitted parameters: {popt}")
+        st.write(f"E_corr: {E_corr}")
+        st.write(f"I_corr: {I_corr}")
+        st.write(f"Anodic slope: {anodic_slope}")
+        st.write(f"Cathodic slope: {cathodic_slope}")
+        st.write(f"R²: {r_square}")
 
-        # Example of using polcurvefit 
-        try:
-            # Hypothetical function call - replace with actual function according to polcurvefit
-            # I'm using a placeholder method `fit_curve` as an example; adjust according to library specifics
-            fit_params = pcf.some_method_to_fit(potential, current_density)  # Replace with actual method
+        # Save plots
+        Polcurve.plotting(output_folder=plot_output_folder)
 
-            # Generate a fit curve to plot based on the fitted parameters
-            # Adjust the function used here according to the fit_params retrieved and polcurvefit methodology
-            fit_curve = np.exp(fit_params['some_coefficient'] * potential)  # Placeholder calculation
+        # Display each plot in the visualization directory
+        st.write("Plots:")
+        files = os.listdir(plot_output_folder)
 
-            # Plot the fitted curve
-            ax.plot(potential, np.log10(np.abs(fit_curve)), label='Polcurvefit Model', color='purple')
-
-            # Show fit parameters
-            st.write(f"Fit Parameters: {fit_params}")
-
-        except Exception as e:
-            st.error(f"Error using polcurvefit: {e}")
-
-        # Set labels and legend
-        ax.set_xlabel('Potential applied (V)')
-        ax.set_ylabel('log(Current Density) (log(A))')
-        ax.legend()
-        ax.grid(True)
-
-        st.pyplot(fig)
-
-if __name__ == "__main__":
-    main()
+        for plot_file in files:
+            # Check if the file is an image
+            if plot_file.lower().endswith(('.png', '.jpg', '.jpeg')):
+                plot_path = os.path.join(plot_output_folder, plot_file)
+                st.image(plot_path, caption=plot_file)
+    except Exception as e:
+        st.error(f"An error occurred: {e}")
