@@ -2,10 +2,14 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import polcurvefit as pcf
+from scipy.optimize import curve_fit
+
+# Dummy function for the fitting model - adjust based on specific model you are using
+def activation_diffusion(x, a1, b1, a2, b2):
+    return a1 * np.exp(b1 * x) - a2 * np.exp(b2 * x)
 
 def main():
-    st.title("Tafel Plot Deconvolution App with Excel Support")
+    st.title("Tafel Plot Deconvolution App")
 
     # Upload data
     st.sidebar.title("Upload Data")
@@ -22,27 +26,26 @@ def main():
         potential = data['Potential applied (V)'].values
         current_density = data['WE(1).Current (A)'].values
         
-        # Logarithm of current density for fitting
+        # Logarithm of current density for fitting: use only positive values
         log_current_density = np.log10(np.abs(current_density))
 
         # Plot the data
         fig, ax = plt.subplots()
         ax.plot(potential, log_current_density, label='Experimental Data', marker='o', linestyle='')
-        
-        # Fit using polcurvefit (adjust based on polcurvefit capabilities and API)
+
+        # Perform curve fitting using scipy's curve_fit
         try:
-            # Perform the fitting using polcurvefit
-            fit_params = pcf.fit(curve=current_density, x=potential, method='tafel')  # Adjust method/args per API
+            fit_params, _ = curve_fit(activation_diffusion, potential, current_density)
             
-            # Use these fit_params to construct a curve (dummy implementation; update based on lib specifics)
-            fit_curve = fit_params['a'] * np.exp(fit_params['b'] * potential) - fit_params['c'] * np.exp(fit_params['d'] * potential)
-            ax.plot(potential, np.log10(np.abs(fit_curve)), label='Polcurvefit Model', color='purple')
+            # Create a fit curve from the fitted parameters
+            fit_curve = activation_diffusion(potential, *fit_params)
+            ax.plot(potential, np.log10(np.abs(fit_curve)), label='Curve Fit Model', color='purple')
 
             # Display fit parameters
-            st.write(f"Polcurvefit Parameters: {fit_params}")
+            st.write(f"Curve Fit Parameters: a1 = {fit_params[0]:.3e}, b1 = {fit_params[1]:.3e}, a2 = {fit_params[2]:.3e}, b2 = {fit_params[3]:.3e}")
         
         except Exception as e:
-            st.error(f"Error in polcurvefit: {e}")
+            st.error(f"Error in curve fitting: {e}")
 
         # Set labels and legend
         ax.set_xlabel('Potential applied (V)')
