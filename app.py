@@ -5,11 +5,38 @@ from scipy.stats import linregress
 import matplotlib.pyplot as plt
 import os
 
-st.title("Visualizing $E_{corr}$: Tafel (activation) vs. Plateau (diffusion) Fitting")
+st.title("Automatic Extraction: $E_{corr}$ from Activation & Diffusion Regions")
 
 uploaded_file = st.file_uploader("Upload CSV or Excel (Potential, Current)", type=["csv", "xlsx"])
-plot_output_folder = 'Visualization_Ecorr_regions'
+plot_output_folder = 'Visualization_auto_regions'
 os.makedirs(plot_output_folder, exist_ok=True)
+
+def find_best_linear_window(E, logI, wsize=15):
+    """Find the window of size wsize where logI vs E is most linear (highest R^2)."""
+    best_R2 = -np.inf
+    best_slope, best_intercept, best_start = 0, 0, 0
+    for i in range(len(E) - wsize + 1):
+        thisE = E[i:i+wsize]
+        thisLogI = logI[i:i+wsize]
+        slope, intercept, r, p, std = linregress(thisE, thisLogI)
+        if r**2 > best_R2:
+            best_R2 = r**2
+            best_slope = slope
+            best_intercept = intercept
+            best_start = i
+    return best_start, best_start+wsize, best_slope, best_intercept, best_R2
+
+def find_best_flat_window(E, I, wsize=15):
+    """Find the window of size wsize with the lowest std(|I|), i.e., flattest region."""
+    best_std = np.inf
+    best_start = 0
+    for i in range(len(E) - wsize + 1):
+        thisI = I[i:i+wsize]
+        stdv = np.std(thisI)
+        if stdv < best_std:
+            best_std = stdv
+            best_start = i
+    return best_start, best_start+wsize, best_std
 
 if uploaded_file is not None:
     if uploaded_file.name.endswith(".csv"):
@@ -25,74 +52,56 @@ if uploaded_file is not None:
     I = df[cur_col].values
 
     mask = (~np.isnan(E)) & (~np.isnan(I)) & (np.abs(I) > 0)
-    E_clean = E[mask]
-    I_clean = I[mask]
+    # always sort by potential for windowing
+    sorter = np.argsort(E)
+    E_clean = E[mask][sorter]
+    I_clean = I[mask][sorter]
 
-    st.write("Choose regions with sliders below (guided by log plot):")
+    logI_clean = np.log10(np.abs(I_clean))
+
+    # ---- Auto-detect best Tafel region (max linear, size 15 points or 12.5% of data) ----
+    win_size = max(10, len(E_clean)//8)
+    t_start, t_end, slope, intercept, r2_tafel = find_best_linear_window(E_clean, logI_clean, wsize=win_size)
+    E_tafel = E_clean[t_start:t_end]
+    logI_tafel = logI_clean[t_start:t_end]
+
+    tafel_slope = 1/slope if slope != 0 else np.inf  # V/dec
+
+    # ---- Auto-detect best plateau region (min std, size 15 points or 12.5% of data) ----
+    p_start, p_end, std_plateau = find_best_flat_window(E_clean, np.abs(I_clean), wsize=win_size)
+    E_plateau = E_clean[p_start:p_end]
+    I_plateau = np.abs(I_clean[p_start:p_end])
+    I_lim = np.median(I_plateau)
+
+    # -- Ecorr as intersection (Tafel line with log10(I_lim))
+    log_Il = np.log10(I_lim)
+    E_corr_auto = (log_Il - intercept) / slope if slope != 0 else np.nan
+
+    # --- Outputs
+    st.success(f"Auto Tafel region: {E_tafel[0]:.3f}–{E_tafel[-1]:.3f} V, slope={tafel_slope*1000:.2f} mV/dec, R²={r2_tafel:.3f}")
+    st.success(f"Auto Plateau region: {E_plateau[0]:.3f}–{E_plateau[-1]:.3f} V, median I_lim={I_lim:.3e} A")
+    st.success(f"Automated $E_{{corr}}$: {E_corr_auto:.4f} V")
+
+    # --- Display overlay plot
     fig, ax = plt.subplots()
-    ax.plot(E_clean, np.abs(I_clean), '-', c="blue", label="|I|")
+    ax.plot(E_clean, np.abs(I_clean), '-', c="blue", label="|I| observed")
+    ax.plot(E_tafel, 10**(slope*E_tafel + intercept), 'r--', label=f"Tafel fit (auto)")
+    ax.axhline(I_lim, color='green', linestyle='--', label='Auto plateau (I_lim)')
+    if not np.isnan(E_corr_auto):
+        ax.axvline(E_corr_auto, color='purple', linestyle='-.', label='$E_{corr}$ (auto)')
     ax.set_yscale('log')
     ax.set_xlabel("Potential (V)")
-    ax.set_ylabel("|I| [A/m²]")
-    ax.set_title("Log(|I|) vs E")
+    ax.set_ylabel("|I| (A/m²)")
+    ax.set_title("Auto region selection: Tafel, Plateau, $E_{corr}$")
+    ax.legend()
     st.pyplot(fig)
 
-    st.write("### Tafel region (log-linear activation region) for fit:")
-    tafel_min = st.number_input('Tafel region: Minimum potential', value=float(np.percentile(E_clean, 5)))
-    tafel_max = st.number_input('Tafel region: Maximum potential', value=float(np.percentile(E_clean, 25)))
-
-    st.write("### Plateau (diffusion) region for fit:")
-    plateau_min = st.number_input('Plateau region: Minimum potential', value=float(np.percentile(E_clean, 75)))
-    plateau_max = st.number_input('Plateau region: Maximum potential', value=float(np.percentile(E_clean, 98)))
-
-    # --- Fit Tafel region (linear, log(|I|))
-    tafel_mask = (E_clean >= tafel_min) & (E_clean <= tafel_max)
-    E_tafel = E_clean[tafel_mask]
-    I_tafel = I_clean[tafel_mask]
-    logI_tafel = np.log10(np.abs(I_tafel))
-
-    show_fit = False
-    if len(E_tafel) >= 2:
-        # Linear fit in Tafel region
-        slope, intercept, r, p, std = linregress(E_tafel, logI_tafel)
-        tafel_slope = 1/slope  # V/dec
-        show_fit = True
-
-    # --- Plateau region fit (mean/median)
-    plateau_mask = (E_clean >= plateau_min) & (E_clean <= plateau_max)
-    E_plateau = E_clean[plateau_mask]
-    I_plateau = I_clean[plateau_mask]
-    I_lim = np.median(np.abs(I_plateau))
-
-    # -- Find Ecorr as intersection of linear (logI= slope*E+intercept) and plateau (logIl)
-    if show_fit:
-        log_Il = np.log10(I_lim)
-        # Solve for E: slope*E + intercept = log_Il  =>  E = (log_Il - intercept) / slope
-        E_corr_tafel_vs_plateau = (log_Il - intercept) / slope
-        st.success(f"Intersection $E_{{corr}}$ (Tafel/Plateau): {E_corr_tafel_vs_plateau:.4f} V")
-        st.write(f"Tafel slope: {tafel_slope*1000:.2f} mV/dec")
-        st.write(f"R²(Tafel fit): {r**2:.3f}")
-        st.write(f"Limiting current (plateau): {I_lim:.3e} A")
-
-    # -- Plot all
-    fig2, ax2 = plt.subplots()
-    ax2.plot(E_clean, np.abs(I_clean), '-', c="blue", label="|I| observed")
-    if show_fit:
-        E_line = np.linspace(tafel_min, tafel_max, 100)
-        ax2.plot(E_line, 10**(slope*E_line + intercept), 'r--', label="Tafel fit (activation)")
-        ax2.axhline(I_lim, color='green', linestyle='--', label='Plateau (diffusion) median')
-        ax2.axvline(E_corr_tafel_vs_plateau, color='purple', linestyle='-.', label='$E_{corr}$ (Tafel/Plateau intersection)')
-    ax2.set_yscale('log')
-    ax2.set_xlabel("Potential (V)")
-    ax2.set_ylabel("|I| (A/m²)")
-    ax2.set_title("Activation vs Diffusion Region: $E_{corr}$ visualization")
-    ax2.legend()
-    st.pyplot(fig2)
-    plt.savefig(os.path.join(plot_output_folder, "activation_vs_diffusion_Ecorr.png"))
+    st.markdown(f"Best Tafel region values: {E_tafel[0]:.3f} – {E_tafel[-1]:.3f} V, slope {tafel_slope*1000:.2f} mV/dec, R² {r2_tafel:.3f}")
+    st.markdown(f"Best plateau (diffusion) region: {E_plateau[0]:.3f} – {E_plateau[-1]:.3f} V, median |I_lim| = {I_lim:.3e} A")
+    st.markdown(f"Computed intersection $E_{{corr}}$ = {E_corr_auto:.4f} V")
 
     st.markdown("""
     ---
-    **You can now see the $E_{corr}$ as found either by the full Tafel/activation region fit,
-    by the intersection with the plateau region, and how different segments of the curve give
-    different $E_{corr}$ values.**
+    **This app auto-detects and fits the regions in your polarization curve most likely to represent the activation (Tafel) and diffusion (plateau) processes.
+    It overlays both regimes and shows $E_{corr}$ from their intersection, with no manual selection.**
     """)
