@@ -104,4 +104,41 @@ if uploaded_file is not None:
 
         st.success("Fit completed! Tafel log plot below.")
         st.markdown(f"""
-- **Ecorr (corrosion potential, fit, V):** {Ecorr
+- **Ecorr (corrosion potential, fit, V):** {Ecorr:.4f}
+- **Icorr (corrosion current, fit, A):** {Icorr:.3e}
+- **Anodic Tafel slope (V/dec):** {anodic_slope:.4f}
+- **Cathodic Tafel slope (V/dec):** {cathodic_slope:.4f}
+- **Limiting current (fit, A):** {lim_current:.3e}
+""")
+        if abs(E_fit.mean() - Ecorr) > 0.25:
+            st.warning("Fit window far from Ecorr. Make sure you are fitting the right region around Ecorr for best Tafel results.")
+
+        # -- Plot: log10(|i|) vs E with overlay in fit region
+        fig, ax = plt.subplots(figsize=(6,4))
+        ax.plot(E, np.log10(np.abs(i)), 'o', alpha=0.3, label='All data')
+        ax.plot(E_fit, np.log10(np.abs(i_fit)), 'ro', mfc='none', label='Fit region')
+        try:
+            fit_results = Polcurve.fit_results
+            I_model, E_model = np.array(fit_results[0]), np.array(fit_results[1])
+            ax.plot(E_model, np.log10(np.abs(I_model/area_cm2)), 'orange', linewidth=2, label='Fit (model)')
+        except Exception:
+            st.warning("Could not plot fit overlay directly.")
+        ax.set_xlabel("E [V vs Ref]")
+        ax.set_ylabel("log10(|i|) (A/cm²)")
+        ax.set_title("Tafel Plot: log10(|i|) vs E (fit overlay)")
+        ax.legend()
+        ax.grid(True)
+        st.pyplot(fig)
+    except Exception as fit_exc:
+        st.error(f"Fit failed: {fit_exc}")
+
+st.markdown("""
+---
+**How to get a good fit:**  
+- Select a window covering only the region where your plot is (locally) straight in log10(|i|) — typically ±0.10 to ±0.25 V around Ecorr, avoiding side/reverse/plateau regions.
+- Tune the weights for your chemistry:  
+    - Lower W = less plateau influence  
+    - Higher w_ac = more Tafel slope influence  
+- Use the log plot overlay to judge quality — the model (orange) should follow the red fit-region points.
+- Adjust until your fit describes the most important region of your science.  
+""")
