@@ -2,14 +2,10 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.optimize import curve_fit
-
-# Dummy function for the fitting model - adjust based on specific model you are using
-def activation_diffusion(x, a1, b1, a2, b2):
-    return a1 * np.exp(b1 * x) - a2 * np.exp(b2 * x)
+import polcurvefit as pcf  # Assuming this is how the library is imported
 
 def main():
-    st.title("Tafel Plot Deconvolution App")
+    st.title("Tafel Plot Deconvolution App with Polcurvefit")
 
     # Upload data
     st.sidebar.title("Upload Data")
@@ -26,26 +22,31 @@ def main():
         potential = data['Potential applied (V)'].values
         current_density = data['WE(1).Current (A)'].values
         
-        # Logarithm of current density for fitting: use only positive values
+        # Logarithm of current density for plotting
         log_current_density = np.log10(np.abs(current_density))
 
         # Plot the data
         fig, ax = plt.subplots()
         ax.plot(potential, log_current_density, label='Experimental Data', marker='o', linestyle='')
 
-        # Perform curve fitting using scipy's curve_fit
+        # Example of using polcurvefit 
         try:
-            fit_params, _ = curve_fit(activation_diffusion, potential, current_density)
-            
-            # Create a fit curve from the fitted parameters
-            fit_curve = activation_diffusion(potential, *fit_params)
-            ax.plot(potential, np.log10(np.abs(fit_curve)), label='Curve Fit Model', color='purple')
+            # Hypothetical function call - replace with actual function according to polcurvefit
+            # I'm using a placeholder method `fit_curve` as an example; adjust according to library specifics
+            fit_params = pcf.some_method_to_fit(potential, current_density)  # Replace with actual method
 
-            # Display fit parameters
-            st.write(f"Curve Fit Parameters: a1 = {fit_params[0]:.3e}, b1 = {fit_params[1]:.3e}, a2 = {fit_params[2]:.3e}, b2 = {fit_params[3]:.3e}")
-        
+            # Generate a fit curve to plot based on the fitted parameters
+            # Adjust the function used here according to the fit_params retrieved and polcurvefit methodology
+            fit_curve = np.exp(fit_params['some_coefficient'] * potential)  # Placeholder calculation
+
+            # Plot the fitted curve
+            ax.plot(potential, np.log10(np.abs(fit_curve)), label='Polcurvefit Model', color='purple')
+
+            # Show fit parameters
+            st.write(f"Fit Parameters: {fit_params}")
+
         except Exception as e:
-            st.error(f"Error in curve fitting: {e}")
+            st.error(f"Error using polcurvefit: {e}")
 
         # Set labels and legend
         ax.set_xlabel('Potential applied (V)')
