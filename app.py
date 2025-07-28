@@ -11,7 +11,14 @@ except ImportError:
     st.error("polcurvefit is not installed. Please run 'pip install polcurvefit'")
     st.stop()
 
-st.title("Mixed-Control Polarization Curve Fit")
+st.title("Auto-center Mixed-Control Polarization Curve Fit (Ecorr-centered Tafel Window)")
+
+st.markdown("""
+Upload your polarization curve data (CSV or Excel, columns: 'Potential applied (V)', 'WE(1).Current (A)').
+The fit window will be **automatically centered on the fitted Ecorr** (±0.15 V by default, or as much as your data allows).
+You can still tune weights for a physically meaningful, high-quality fit!
+Plot is **log10(|i|) vs E** and key values are shown below.
+""")
 
 uploaded_file = st.file_uploader(
     "Upload a CSV or Excel file (columns: 'Potential applied (V)', 'WE(1).Current (A)')",
@@ -57,56 +64,46 @@ if uploaded_file is not None:
         st.error("Too few valid data points after cleaning. Check your file!")
         st.stop()
 
-    # --- Initial fit to get Ecorr for slider reference
+    # --- Preliminary fit to get Ecorr
     Polcurve_preview = polcurvefit(E, I, sample_surface=area_cm2)
-    Ecorr_preview = Polcurve_preview._find_Ecorr()
+    Ecorr = Polcurve_preview._find_Ecorr()
 
-    st.markdown("#### Select potential window for fit ⟶")
-    vmin, vmax = E.min(), E.max()
-    # Suggest a window ±0.15V around Ecorr for Tafel/mixed
-    win_default = (max(vmin, Ecorr_preview-0.15), min(vmax, Ecorr_preview+0.15))
-    fit_window = st.slider(
-        "Potential window for fit (V) [absolute, not vs Ecorr]",
-        min_value=float(vmin), max_value=float(vmax),
-        value=(float(win_default[0]), float(win_default[1])),
-        step=0.002, format="%.3f"
-    )
-    wmin, wmax = fit_window
+    # --- Set fit window centered on Ecorr
+    tafel_width = st.number_input('Tafel window width (V, ± around Ecorr)', min_value=0.05, max_value=0.40, value=0.15, step=0.01, format="%.2f")
+    wmin = max(E.min(), Ecorr - tafel_width)
+    wmax = min(E.max(), Ecorr + tafel_width)
+    st.info(f"Auto-fit window: {wmin:.3f} V to {wmax:.3f} V (centered on Ecorr = {Ecorr:.4f} V)")
+
     region_mask = (E >= wmin) & (E <= wmax)
     E_fit = E[region_mask]
     I_fit = I[region_mask]
     i_fit = i[region_mask]
-
-    st.info(f"Fit window: {wmin:.3f} V to {wmax:.3f} V (absolute, fit region shown in red on plot)")
 
     # --- Fit weights (user-adjustable)
     w_ac = st.slider("Weight for active (Tafel) region (w_ac)", 0.01, 0.20, 0.08, step=0.01, format="%.2f")
     W = st.slider("Weight for diffusion (plateau) region (W)", 5, 120, 20, step=1)
     st.info(f"Fitting weights: w_ac={w_ac}, W={W}")
 
-    # --- Fit
     if len(E_fit) < 7:
-        st.error("Too few points in selected window for fit. Adjust the window.")
+        st.error("Too few points in auto-selected window for fit. Try increasing window width or check data range.")
         st.stop()
 
+    # --- Fit
     Polcurve = polcurvefit(E_fit, I_fit, sample_surface=area_cm2)
-    Ecorr = Polcurve._find_Ecorr()
-    window = [np.min(E_fit) - Ecorr, np.max(E_fit) - Ecorr]
+    Ecorr_fit = Polcurve._find_Ecorr()
+    window = [np.min(E_fit) - Ecorr_fit, np.max(E_fit) - Ecorr_fit]
     try:
         result = Polcurve.mixed_pol_fit(window=window, apply_weight_distribution=True, w_ac=w_ac, W=W)
-        [_, _], Ecorr, Icorr, anodic_slope, cathodic_slope, lim_current, _, *_ = result
+        [_, _], Ecorr_out, Icorr, anodic_slope, cathodic_slope, lim_current, _, *_ = result
 
         st.success("Fit completed! Tafel log plot below.")
         st.markdown(f"""
-- **Ecorr (corrosion potential, fit, V):** {Ecorr:.4f}
+- **Ecorr (corrosion potential, fit, V):** {Ecorr_out:.4f}
 - **Icorr (corrosion current, fit, A):** {Icorr:.3e}
 - **Anodic Tafel slope (V/dec):** {anodic_slope:.4f}
 - **Cathodic Tafel slope (V/dec):** {cathodic_slope:.4f}
 - **Limiting current (fit, A):** {lim_current:.3e}
 """)
-        if abs(E_fit.mean() - Ecorr) > 0.25:
-            st.warning("Fit window far from Ecorr. Make sure you are fitting the right region around Ecorr for best Tafel results.")
-
         # -- Plot: log10(|i|) vs E with overlay in fit region
         fig, ax = plt.subplots(figsize=(6,4))
         ax.plot(E, np.log10(np.abs(i)), 'o', alpha=0.3, label='All data')
@@ -126,3 +123,13 @@ if uploaded_file is not None:
     except Exception as fit_exc:
         st.error(f"Fit failed: {fit_exc}")
 
+st.markdown("""
+---
+**Notes:**  
+- The fit window is always **centered on the current Ecorr** for objective Tafel analysis.
+- Tafel window width can be tuned above (increase if you want more data, decrease to focus narrowly).
+- Tune the weights for your chemistry:
+    - Lower W = less plateau influence
+    - Higher w_ac = more Tafel slope influence  
+- Use the log plot overlay to judge fit quality — the model (orange) should follow the red fit-region points.
+""")
