@@ -1,5 +1,5 @@
-import numpy as np
 import streamlit as st
+import numpy as np
 import pandas as pd
 import os
 
@@ -9,7 +9,7 @@ except ImportError:
     st.error("polcurvefit class not found. Please make sure 'polcurvefit.py' is in your app folder or the package is installed.")
     st.stop()
 
-st.title("Improved Automated Tafel Fit (weighted & auto-windowed)")
+st.title("Robust Automated Mixed-Control Tafel Fit (Activation + Diffusion, weighted & windowed)")
 
 uploaded_file = st.file_uploader(
     "Upload CSV or Excel (potential in one column, current in another)", 
@@ -20,6 +20,7 @@ os.makedirs(plot_output_folder, exist_ok=True)
 
 if uploaded_file is not None:
     try:
+        # Load file
         if uploaded_file.name.endswith(".csv"):
             df = pd.read_csv(uploaded_file)
         elif uploaded_file.name.endswith(".xlsx"):
@@ -33,53 +34,49 @@ if uploaded_file is not None:
 
         potential_col = st.selectbox("Select Potential column:", df.columns, index=0)
         current_col = st.selectbox("Select Current column:", df.columns, index=2 if len(df.columns) > 2 else 1)
-
         E = df[potential_col].values
         I = df[current_col].values
 
+        # Surface area input
         st.markdown("**Surface area affects Icorr and Ilim. Default is 1 cm².**")
         area_cm2 = st.number_input('Sample surface area (cm²)', min_value=0.0001, value=1.0)
         area_m2 = area_cm2 * 1e-4
 
-        # Clean input
+        # Clean input (remove zeros/NaNs)
         mask = (np.abs(I) > 0) & (~np.isnan(I)) & (~np.isnan(E))
         E_clean = E[mask]
         I_clean = I[mask]
 
-        # Initialize object
+        # Initialize polcurvefit instance
         Polcurve = polcurvefit(E_clean, I_clean, sample_surface=area_m2)
 
-        # Automatic window: Ecorr +/- wwin (e.g. 0.6 V)
+        # Automatic window: Ecorr ± 0.6 V
         e_corr = Polcurve._find_Ecorr()
         wwin = 0.6
-        window = [ -wwin, +wwin ]
+        window = [-wwin, +wwin]
 
-        # Weight more around Ecorr
-        st.info("Fitting region weighted around Ecorr ±{:.2f} V...".format(wwin))
+        # Calculate robust initial guesses INSIDE bounds
+        abs_Iclean = np.abs(I_clean)
+        i_min = np.min(abs_Iclean[abs_Iclean > 0])
+        i_max = np.max(abs_Iclean)
+        i_corr_guess = np.median(abs_Iclean)
+        i_L_guess = np.percentile(abs_Iclean, 95)
+        i_corr_guess = np.clip(i_corr_guess, i_min * 1.01, i_max * 0.99)
+        i_L_guess = np.clip(i_L_guess, i_min * 1.01, i_max * 0.99)
 
-        # Use robust initial guesses
-        i_corr_guess = np.percentile(np.abs(I_clean), 50)
-        i_L_guess = np.percentile(np.abs(I_clean), 95)
+        st.info(f"Fitting Ecorr ±{wwin} V window. Weighted fit near Ecorr, robust initial values.")
 
-        # Try the weighted fit WITH a reasonable window and weighting, if supported
-        if hasattr(Polcurve, "mixed_pol_fit"):
-            fit_result = Polcurve.mixed_pol_fit(
-                window,
-                i_corr_guess = i_corr_guess,
-                i_L_guess = i_L_guess,
-                apply_weight_distribution = True, # WEIGHT key region
-                w_ac = 0.04,  # Width of region with extra weight (in V around Ecorr)
-                W = 80        # % weight assigned to this region (try 75–90)
-            )
-            [_, _], E_corr, I_corr, anodic_slope, cathodic_slope, lim_current, r2, *_ = fit_result
-        elif hasattr(Polcurve, "active_diff_pol_fit"):
-            fit_result = Polcurve.active_diff_pol_fit()
-            popt, E_corr, I_corr, anodic_slope, cathodic_slope, lim_current, r2 = fit_result
-        else:
-            st.error("No global mixed-control fitting method found in your polcurvefit install.")
-            st.stop()
+        fit_result = Polcurve.mixed_pol_fit(
+            window,
+            i_corr_guess=i_corr_guess,
+            i_L_guess=i_L_guess,
+            apply_weight_distribution=True,
+            w_ac=0.04,  # width around Ecorr with extra weight (V)
+            W=80        # percent weight in window
+        )
+        [_, _], E_corr, I_corr, anodic_slope, cathodic_slope, lim_current, r2, *_ = fit_result
 
-        st.success("Weighted, windowed fit completed!")
+        st.success("Windowed, weighted fit completed!")
 
         st.markdown("### Results (from improved fit):")
         st.write(f"- **E_corr:** {E_corr:.4f} V")
@@ -126,5 +123,5 @@ if uploaded_file is not None:
 
 st.markdown("""
 ---
-**This app fits your *entire* polarization curve using a window and weighting scheme that down-weights outlier/border regions and focuses on the main Tafel/diffusion zone. If fit is still non-optimal, further model refinement or more advanced pre-processing may be needed.**
+**This app fits your *entire* polarization curve using a window and weighting scheme that focuses on the main Tafel/diffusion region, improves initial guess robustness, and minimizes the impact of outliers and borders. If fit is still non-optimal, further model refinement or more advanced pre-processing may be needed.**
 """)
