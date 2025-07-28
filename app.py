@@ -72,15 +72,22 @@ if uploaded_file is not None:
         st.write(f"- **Cathodic Tafel slope:** {cathodic_slope*1000:.2f} mV/dec")
         st.write(f"- **Limiting current (I_lim):** {lim_current:.3e} A")
 
-        # ------ NEW: Standard R² calculation ------
+        # ------ NEW: Standard R² calculation on log(|I|) ------
         import numpy as np
         E_fit = np.array(Polcurve.fit_results[1])
         I_fit = np.array(Polcurve.fit_results[0])
         I_pred = np.interp(E, E_fit, I_fit)
         I_obs = I
-        r2_true = 1 - np.sum((I_obs - I_pred) ** 2) / np.sum((I_obs - np.mean(I_obs)) ** 2)
-        st.write(f"- **Goodness of fit (R², standard regression):** {r2_true:.4f}")
-        # ------------------------------------------
+        mask = (np.abs(I_obs) > 0) & (np.abs(I_pred) > 0)
+        if np.sum(mask) < 3:
+            st.warning("Not enough nonzero data for meaningful R² calculation.")
+            r2_log = np.nan
+        else:
+            logI_obs = np.log10(np.abs(I_obs[mask]))
+            logI_pred = np.log10(np.abs(I_pred[mask]))
+            r2_log = 1 - np.sum((logI_obs - logI_pred) ** 2) / np.sum((logI_obs - np.mean(logI_obs)) ** 2)
+        st.write(f"- **Goodness of fit (R², log-I):** {r2_log:.4f}")
+        # ------------------------------------------------------
 
         # Save and display plots
         try:
@@ -102,8 +109,3 @@ if uploaded_file is not None:
 
     except Exception as e:
         st.error(f"An error occurred: {e}")
-
-st.markdown("""
----
-**This app fits your *entire* polarization curve using a model that separates activation (Tafel) and diffusion effects, as recommended for real systems. It works with both the full library and the class-only version. If you get a 'fit method not found' error, ensure you are using a recent polcurvefit or that your local .py file is present.**
-""")
