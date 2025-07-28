@@ -54,7 +54,7 @@ if uploaded_file is not None:
         fit_result = Polcurve.mixed_pol_fit(
             window,
             apply_weight_distribution=True,
-            w_ac=0.04,
+            w_ac=0.06,
             W=80
         )
         [_, _], E_corr, I_corr, anodic_slope, cathodic_slope, lim_current, r2, *_ = fit_result
