@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import os
+import shutil
 
 try:
     from polcurvefit import polcurvefit
@@ -16,6 +17,8 @@ uploaded_file = st.file_uploader(
     type=["csv", "xlsx"]
 )
 plot_output_folder = 'Visualization_mixed_control_fit'
+if os.path.exists(plot_output_folder):
+    shutil.rmtree(plot_output_folder)
 os.makedirs(plot_output_folder, exist_ok=True)
 
 if uploaded_file is not None:
@@ -34,28 +37,35 @@ if uploaded_file is not None:
     I = df[cur_col].values
 
     st.write(df[[pot_col, cur_col]].head(20))
+    area_cm2 = st.number_input('Sample surface area (cm²)', min_value=0.0001, value=1.0, format="%.4f")
 
-    area_cm2 = st.number_input('Sample surface area (cm²)', min_value=0.0001, value=1.0)
-    area_m2 = area_cm2 * 1e-4
+    # User slider for w_ac and W
+    st.markdown("### Fit Weight Sliders")
+    w_ac = st.slider("Weight for ACTIVE (Tafel) region (w_ac)", 0.01, 0.2, value=0.04, step=0.01, format="%.2f")
+    W = st.slider("Weight for DIFFUSION/plateau region (W)", 5, 150, value=80, step=1)
 
     # Remove NaNs, zeros if present
     mask = (~np.isnan(E)) & (~np.isnan(I)) & (np.abs(I) > 0)
     E_clean = E[mask]
     I_clean = I[mask]
 
-    Polcurve = polcurvefit(E_clean, I_clean, sample_surface=area_m2)
+    if len(E_clean) < 7:
+        st.error("Too few data points after cleaning. Check your file!")
+        st.stop()
+
+    Polcurve = polcurvefit(E_clean, I_clean, sample_surface=area_cm2)
     e_corr = Polcurve._find_Ecorr()
 
-    # -- *** FIT WINDOW: ENTIRE POTENTIAL RANGE *** --
+    # -- FIT WINDOW: ENTIRE POTENTIAL RANGE --
     window = [np.min(E_clean) - e_corr, np.max(E_clean) - e_corr]
-    st.info(f"Fitting entire window: [{window[0]:.3f}, {window[1]:.3f}] V around Ecorr.")
+    st.info(f"Fitting entire window: [{window[0]:.3f}, {window[1]:.3f}] V around Ecorr ({e_corr:.4f} V).")
 
     try:
         fit_result = Polcurve.mixed_pol_fit(
             window,
             apply_weight_distribution=True,
-            w_ac=0.06,
-            W=80
+            w_ac=w_ac,
+            W=W
         )
         [_, _], E_corr, I_corr, anodic_slope, cathodic_slope, lim_current, r2, *_ = fit_result
 
@@ -97,5 +107,8 @@ if uploaded_file is not None:
 
 st.markdown("""
 ---
-**This app fits your entire polarization curve using the full model (activation+diffusion/plateau regions) in one step. If the plateau is visible in your data, you will see it fitted. For advanced multi-process fitting, consult a corrosion analyst or use data containing both Tafel and limiting branches.**
+**Tuning tips:**  
+- Lower `W` emphasizes Tafel (kinetic) region, less the plateau.  
+- Raise `w_ac` to give even more influence to the activation-controlled parts near zero current.
+Try sliding these as you watch the fit plot update live!
 """)
