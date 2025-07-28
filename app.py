@@ -4,24 +4,20 @@ import numpy as np
 import os
 import shutil
 
-# Try to import polcurvefit, else show error
 try:
     from polcurvefit import polcurvefit
 except ImportError:
     st.error("polcurvefit class not found. Please make sure 'polcurvefit.py' is in your app folder or the package is installed. Install: pip install polcurvefit")
     st.stop()
 
-st.title("Global Mixed-Control Tafel Fit (Activation + Diffusion)")
+st.title("Global Mixed-Control Tafel Fit (Tune your window and weighting!)")
 
-# File uploader
 uploaded_file = st.file_uploader(
     "Upload CSV or Excel (columns: your potential and current)", 
     type=["csv", "xlsx"]
 )
 
 plot_output_folder = 'Visualization_mixed_control_fit'
-
-# Wipe output folder on new run for clean plot listing
 if os.path.exists(plot_output_folder):
     shutil.rmtree(plot_output_folder)
 os.makedirs(plot_output_folder, exist_ok=True)
@@ -32,50 +28,54 @@ if uploaded_file is not None:
         df = pd.read_csv(uploaded_file)
     elif uploaded_file.name.endswith(".xlsx"):
         df = pd.read_excel(uploaded_file)
-    else:
-        st.error("Unsupported file format.")
-        st.stop()
 
-    # ---- Column names for YOUR data, with check and user select fallback ----
-    expected_cols = ['Potential applied (V)', 'WE(1).Current (A)']
-    for col in expected_cols:
+    # ---- Column names for YOUR data
+    pot_col = 'Potential applied (V)'
+    cur_col = 'WE(1).Current (A)'
+    for col in [pot_col, cur_col]:
         if col not in df.columns:
             st.error(f"Expected column '{col}' not found! Columns found: {df.columns.tolist()}")
             st.stop()
-
-    pot_col = 'Potential applied (V)'
-    cur_col = 'WE(1).Current (A)'
-    st.write("Using columns:", pot_col, "and", cur_col)
-
     E = df[pot_col].astype(float).values
     I = df[cur_col].astype(float).values
 
     st.write(df[[pot_col, cur_col]].head(20))
-
-    # Get surface area (default 1 cm^2 for current density, user can edit)
     area_cm2 = st.number_input('Sample surface area (cm²)', min_value=1e-8, value=1.0, format="%.4f")
-    
-    # Remove NaNs, zeros if present (to avoid fit crash)
+
+    # Clean
     mask = (~np.isnan(E)) & (~np.isnan(I)) & (np.abs(I) > 0)
     E_clean = E[mask]
     I_clean = I[mask]
 
-    # Initialize polcurvefit (area in cm^2 is correct argument)
     Polcurve = polcurvefit(E_clean, I_clean, sample_surface=area_cm2)
-
-    # Find Ecorr for potential windowing (ensures window centered on Ecorr)
     e_corr = Polcurve._find_Ecorr()
 
-    # Window covering whole range, centered around Ecorr
-    window = [np.min(E_clean) - e_corr, np.max(E_clean) - e_corr]
-    st.info(f"Fitting entire window: [{window[0]:.3f}, {window[1]:.3f}] V (centered at Ecorr)")
+    # --- USER SELECTS FITTING WINDOW ---
+    vmin,vmax = float(np.min(E_clean)), float(np.max(E_clean))
+    st.write("**Select the region (vs Ecorr) to fit (default: usually -0.1 to +0.1 V)**")
+    suggested_min = max(vmin, e_corr-0.12)
+    suggested_max = min(vmax, e_corr+0.12)
+    window = st.slider(
+        "Fitting window (V vs Ecorr, left = more cathodic, right = more anodic)", 
+        min_value=vmin, max_value=vmax, 
+        value=(suggested_min, suggested_max), step=0.005,
+        format="%.3f"
+    )
+    window_vs_Ecorr = [window[0] - e_corr, window[1] - e_corr]
+
+    # --- USER TUNES WEIGHTING ---
+    st.write("**Tune weighting to change how much priority is given to active (kinetic) vs diffusion (plateau):**")
+    w_ac = st.slider("Relative weight for ACTIVE region (w_ac)", 0.01, 0.2, value=0.05, step=0.01, format="%.2f")
+    W = st.slider("Weight for DIFFUSION/plateau (W)", 1, 200, value=40, step=5)
+
+    st.info(f"Fitting window: [{window_vs_Ecorr[0]:.3f}, {window_vs_Ecorr[1]:.3f}] V (vs. Ecorr: {e_corr:.3f} V)")
 
     try:
         fit_result = Polcurve.mixed_pol_fit(
-            window,
+            window_vs_Ecorr,
             apply_weight_distribution=True,
-            w_ac=0.04,
-            W=80
+            w_ac=w_ac,
+            W=W
         )
         [_, _], E_corr, I_corr, anodic_slope, cathodic_slope, lim_current, r2, *_ = fit_result
 
@@ -117,14 +117,8 @@ if uploaded_file is not None:
 
 st.markdown("""
 ---
-This app fits your polarization curve using activation (Tafel) and diffusion (plateau) mixed control 
-according to Ule Angst's method (polcurvefit). 
-
-1. Upload a polarization curve CSV or Excel file (columns: Potential, Current)
-2. Confirm/adjust your working electrode area (cm²)
-3. The software fits the _whole measured curve_ using a global model.
-4. You see the extracted corrosion parameters, slopes, limiting current and R² for log(current).
-5. Plots of the fit are generated for QC.
-
-*For column names different from the defaults, edit the code section that picks columns.*
+**TIP:**  
+- Narrow the fitting window to the Tafel region (the regime *after* the "bend" but before the plateau/limiting region).
+- Increase `w_ac` to give more emphasis to the kinetics; decrease `W` to reduce the influence of the plateau.
+- Try changing the window and weights and see the fit visually update!
 """)
