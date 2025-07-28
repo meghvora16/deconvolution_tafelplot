@@ -9,7 +9,7 @@ except ImportError:
     st.error("polcurvefit class not found. Please make sure 'polcurvefit.py' is in your app folder or the package is installed.")
     st.stop()
 
-st.title("Robust Automated Mixed-Control Tafel Fit (Activation + Diffusion, weighted & windowed)")
+st.title("Robust Automated Mixed-Control Tafel Fit (with bulletproof initial guesses)")
 
 uploaded_file = st.file_uploader(
     "Upload CSV or Excel (potential in one column, current in another)", 
@@ -20,7 +20,6 @@ os.makedirs(plot_output_folder, exist_ok=True)
 
 if uploaded_file is not None:
     try:
-        # Load file
         if uploaded_file.name.endswith(".csv"):
             df = pd.read_csv(uploaded_file)
         elif uploaded_file.name.endswith(".xlsx"):
@@ -55,14 +54,21 @@ if uploaded_file is not None:
         wwin = 0.6
         window = [-wwin, +wwin]
 
-        # Calculate robust initial guesses INSIDE bounds
+        # Safe, robust initial guesses INSIDE bounds
+        eps = 1e-6
         abs_Iclean = np.abs(I_clean)
         i_min = np.min(abs_Iclean[abs_Iclean > 0])
         i_max = np.max(abs_Iclean)
-        i_corr_guess = np.median(abs_Iclean)
-        i_L_guess = np.percentile(abs_Iclean, 95)
-        i_corr_guess = np.clip(i_corr_guess, i_min * 1.01, i_max * 0.99)
-        i_L_guess = np.clip(i_L_guess, i_min * 1.01, i_max * 0.99)
+        if i_max <= i_min + eps:
+            # Degenerate data (all currents almost equal), fudge
+            i_corr_guess = i_min * 1.05
+            i_L_guess = i_min * 1.15
+        else:
+            i_corr_guess = i_min + 0.2 * (i_max - i_min)
+            i_L_guess = i_min + 0.8 * (i_max - i_min)
+        # Absolutely INSIDE bounds
+        i_corr_guess = max(i_min + eps, min(i_corr_guess, i_max - eps))
+        i_L_guess = max(i_min + eps, min(i_L_guess, i_max - eps))
 
         st.info(f"Fitting Ecorr ±{wwin} V window. Weighted fit near Ecorr, robust initial values.")
 
@@ -123,5 +129,5 @@ if uploaded_file is not None:
 
 st.markdown("""
 ---
-**This app fits your *entire* polarization curve using a window and weighting scheme that focuses on the main Tafel/diffusion region, improves initial guess robustness, and minimizes the impact of outliers and borders. If fit is still non-optimal, further model refinement or more advanced pre-processing may be needed.**
+**This app fits your polarization curve using a window and weighting scheme that focuses on the main Tafel/diffusion region, using absolutely robust initial guesses (never out-of-bounds). If fit is still non-optimal, further model refinement or more advanced pre-processing may be needed.**
 """)
