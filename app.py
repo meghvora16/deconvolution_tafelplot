@@ -1,101 +1,109 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 import os
+import shutil
 
+# --- Import polcurvefit, show message if absent
 try:
     from polcurvefit import polcurvefit
 except ImportError:
-    st.error("polcurvefit class not found. Please make sure 'polcurvefit.py' is in your app folder or the package is installed.")
+    st.error("polcurvefit is not installed. Please run 'pip install polcurvefit'")
     st.stop()
 
-st.title("Global Mixed-Control Tafel Fit (Fits Linear + Diffusion Region)")
+st.title("Mixed-Control Polarization Curve Fit (van Ede & Angst algorithm)")
+
+st.markdown("""
+This app analyzes your polarization curve **without human bias**, using the algorithm of van Ede & Angst (Cem. Concr. Res. 2023).  
+*Just upload your data and get Ecorr, Icorr, Tafel slopes, limiting current, and publication-ready plots. No manual window selection required!*
+""")
 
 uploaded_file = st.file_uploader(
-    "Upload CSV or Excel (first col Potential, one col Current)", 
+    "Upload a CSV or Excel file (columns: 'Potential applied (V)', 'WE(1).Current (A)')",
     type=["csv", "xlsx"]
 )
-plot_output_folder = 'Visualization_mixed_control_fit'
+
+plot_output_folder = 'Auto_MixedControl_Fit_Plots'
+if os.path.exists(plot_output_folder):
+    shutil.rmtree(plot_output_folder)
 os.makedirs(plot_output_folder, exist_ok=True)
 
 if uploaded_file is not None:
+    # --- Read file
     if uploaded_file.name.endswith(".csv"):
         df = pd.read_csv(uploaded_file)
     elif uploaded_file.name.endswith(".xlsx"):
         df = pd.read_excel(uploaded_file)
     else:
-        st.error("Unsupported file format.")
+        st.error("Unsupported file type.")
         st.stop()
 
-    # --- HARDCODED COLUMN NAMES for your data ---
+    # --- Required columns: hardcoded for your data structure
     pot_col = 'Potential applied (V)'
     cur_col = 'WE(1).Current (A)'
-    E = df[pot_col].values
-    I = df[cur_col].values
+    for col in [pot_col, cur_col]:
+        if col not in df.columns:
+            st.error(f"Missing column '{col}'! Found: {df.columns.tolist()}")
+            st.stop()
 
-    st.write(df[[pot_col, cur_col]].head(20))
+    st.write("**Data preview** (first 20 rows):")
+    st.dataframe(df[[pot_col, cur_col]].head(20))
 
-    area_cm2 = st.number_input('Sample surface area (cm²)', min_value=0.0001, value=1.0)
-    area_m2 = area_cm2 * 1e-4
+    # --- Area input
+    area_cm2 = st.number_input('Sample surface area (cm², for current density)', min_value=1e-6, value=1.0, format="%.4f")
 
-    # Remove NaNs, zeros if present
+    # --- Data cleaning
+    E = df[pot_col].astype(float).values
+    I = df[cur_col].astype(float).values
     mask = (~np.isnan(E)) & (~np.isnan(I)) & (np.abs(I) > 0)
-    E_clean = E[mask]
-    I_clean = I[mask]
+    E = E[mask]
+    I = I[mask]
 
-    Polcurve = polcurvefit(E_clean, I_clean, sample_surface=area_m2)
-    e_corr = Polcurve._find_Ecorr()
+    if len(E) < 7:
+        st.error("Too few valid data points after cleaning. Check your file!")
+        st.stop()
 
-    # -- *** FIT WINDOW: ENTIRE POTENTIAL RANGE *** --
-    window = [np.min(E_clean) - e_corr, np.max(E_clean) - e_corr]
-    st.info(f"Fitting entire window: [{window[0]:.3f}, {window[1]:.3f}] V around Ecorr.")
+    # --- OCP from data
+    idx_OCP = np.argmin(np.abs(I))
+    OCP = E[idx_OCP]
+    st.info(f"Open Circuit Potential (OCP, from data): {OCP:.4f} V (point with |I| minimal)")
 
+    # --- Automated mixed-control fit as per van Ede & Angst (no window!):
+    Polcurve = polcurvefit(E, I, sample_surface=area_cm2)
+    result = Polcurve.mixed_pol_fit(window=None, apply_weight_distribution=True)  # <-- algorithm chooses region
+
+    [_, _], Ecorr, Icorr, anodic_slope, cathodic_slope, lim_current, r2, *_ = result
+
+    st.success("Fit completed (fully automated - van Ede & Angst method)!")
+    st.markdown(f"""
+- **Ecorr (corrosion potential, fit):** {Ecorr:.4f} V  
+- **Icorr (corrosion current, fit):** {Icorr:.3e} A  
+- **Anodic Tafel slope:** {anodic_slope*1000:.2f} mV/dec  
+- **Cathodic Tafel slope:** {cathodic_slope*1000:.2f} mV/dec  
+- **Limiting current (fit):** {lim_current:.3e} A  
+- **R² (log|I|, fit quality):** {r2:.4f}  
+- **OCP (from data):** {OCP:.4f} V  
+- **Δ(OCP - Ecorr):** {OCP - Ecorr:+.4f} V
+""")
+    if abs(OCP - Ecorr) > 0.025:
+        st.warning("OCP and Ecorr differ by >25 mV. Check data and fit.")
+
+    # --- Plots
     try:
-        fit_result = Polcurve.mixed_pol_fit(
-            window,
-            apply_weight_distribution=True,
-            w_ac=0.04,
-            W=80
-        )
-        [_, _], E_corr, I_corr, anodic_slope, cathodic_slope, lim_current, r2, *_ = fit_result
-
-        st.success("Fit completed!")
-        st.write(f"- **E_corr:** {E_corr:.4f} V")
-        st.write(f"- **I_corr:** {I_corr:.3e} A")
-        st.write(f"- **Anodic Tafel slope:** {anodic_slope*1000:.2f} mV/dec")
-        st.write(f"- **Cathodic Tafel slope:** {cathodic_slope*1000:.2f} mV/dec")
-        st.write(f"- **Limiting current (I_lim):** {lim_current:.3e} A")
-
-        # Log-scale R² calculation
-        E_fit = np.array(Polcurve.fit_results[1])
-        I_fit = np.array(Polcurve.fit_results[0])
-        I_pred = np.interp(E_clean, E_fit, I_fit)
-        I_obs = I_clean
-        mask2 = (np.abs(I_obs) > 0) & (np.abs(I_pred) > 0)
-        if np.sum(mask2) < 3:
-            st.warning("Not enough data after cleaning for R² calculation.")
-            r2_log = np.nan
-        else:
-            logI_obs = np.log10(np.abs(I_obs[mask2]))
-            logI_pred = np.log10(np.abs(I_pred[mask2]))
-            r2_log = 1 - np.sum((logI_obs - logI_pred) ** 2) / np.sum((logI_obs - np.mean(logI_obs)) ** 2)
-        st.write(f"- **Goodness of fit (R², log-I):** {r2_log:.4f}")
-
-        # Save and display plots
-        try:
-            Polcurve.plotting(output_folder=plot_output_folder)
-            st.markdown("### Plots:")
-            for plot_file in sorted(os.listdir(plot_output_folder)):
-                if plot_file.lower().endswith(('.png', '.jpg', '.jpeg')):
-                    plot_path = os.path.join(plot_output_folder, plot_file)
-                    st.image(plot_path, caption=plot_file)
-        except Exception as plotexc:
-            st.warning(f"Plotting failed: {plotexc}")
-
-    except Exception as fit_exc:
-        st.error(f"Fit failed: {fit_exc}")
+        Polcurve.plotting(output_folder=plot_output_folder)
+        st.markdown("### Fit Plots (for publication/QC)")
+        for plot_file in sorted(os.listdir(plot_output_folder)):
+            if plot_file.lower().endswith(('.png', '.jpg', '.jpeg')):
+                st.image(os.path.join(plot_output_folder, plot_file), caption=plot_file)
+    except Exception as plotexc:
+        st.warning(f"Plotting failed: {plotexc}")
 
 st.markdown("""
----
-**This app fits your entire polarization curve using the full model (activation+diffusion/plateau regions) in one step. If the plateau is visible in your data, you will see it fitted. For advanced multi-process fitting, consult a corrosion analyst or use data containing both Tafel and limiting branches.**
+----
+**How it works:**  
+- Uses the van Ede & Angst (2023) algorithm for polarization curve fitting under mixed activation-diffusion control  
+- No manual window selection (minimizes human bias as in the paper)
+- Fitted Icorr, Ecorr, slopes, limiting current, and plots are all exported  
+- Full details: see [original paper](https://www.sciencedirect.com/science/article/pii/S0008884623001869) and [polcurvefit](https://github.com/uleangst/polcurvefit)
 """)
