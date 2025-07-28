@@ -1,14 +1,18 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from scipy.stats import linregress
-import matplotlib.pyplot as plt
 import os
 
-st.title("Visualize $E_{corr}$ Shift from Two Fitting Regions")
+try:
+    from polcurvefit import polcurvefit
+except ImportError:
+    st.error("polcurvefit is not installed. Please ensure polcurvefit.py or the package is present.")
+    st.stop()
+
+st.title("Weighted Automated Fit à la van Ede & Angst (2022)")
 
 uploaded_file = st.file_uploader("Upload CSV or Excel (Potential, Current)", type=["csv", "xlsx"])
-plot_output_folder = 'Visualization_ecorr_shift'
+plot_output_folder = 'Visualization_weighted_fit'
 os.makedirs(plot_output_folder, exist_ok=True)
 
 if uploaded_file is not None:
@@ -27,79 +31,65 @@ if uploaded_file is not None:
     mask = (~np.isnan(E)) & (~np.isnan(I)) & (np.abs(I) > 0)
     E_clean = E[mask]
     I_clean = I[mask]
-    N = len(E_clean)
 
-    st.markdown("#### Fitting region set **A** (Tafel & plateau):")
-    tafel_min_A = st.number_input('Tafel A min (V)', value=float(np.percentile(E_clean, 5)), key='taAmin')
-    tafel_max_A = st.number_input('Tafel A max (V)', value=float(np.percentile(E_clean, 25)), key='taAmax')
-    plateau_min_A = st.number_input('Plateau A min (V)', value=float(np.percentile(E_clean, 75)), key='paAmin')
-    plateau_max_A = st.number_input('Plateau A max (V)', value=float(np.percentile(E_clean, 98)), key='paAmax')
+    area_cm2 = st.number_input('Sample surface area (cm²)', min_value=0.0001, value=1.0)
+    area_m2 = area_cm2 * 1e-4
 
-    st.markdown("#### Fitting region set **B** (Tafel & plateau):")
-    tafel_min_B = st.number_input('Tafel B min (V)', value=float(np.percentile(E_clean, 10)), key='taBmin')
-    tafel_max_B = st.number_input('Tafel B max (V)', value=float(np.percentile(E_clean, 30)), key='taBmax')
-    plateau_min_B = st.number_input('Plateau B min (V)', value=float(np.percentile(E_clean, 80)), key='paBmin')
-    plateau_max_B = st.number_input('Plateau B max (V)', value=float(np.percentile(E_clean, 99)), key='paBmax')
+    # Parameters as in van Ede & Angst (see Suppl. Info for recommended values)
+    w_ac = st.number_input("Width of high-weight region around $E_{corr}$ (V)", value=0.04, min_value=0.001, max_value=1.0, step=0.01, format="%.3f")
+    W = st.number_input("Weight percentage in $w_{ac}$ region (%)", value=80, min_value=10, max_value=100, step=5)
+    
+    Polcurve = polcurvefit(E_clean, I_clean, sample_surface=area_m2)
+    e_corr = Polcurve._find_Ecorr()
+    # Use the full available data span relative to Ecorr
+    window = [np.min(E_clean) - e_corr, np.max(E_clean) - e_corr]
 
-    # ---- Helper for any region
-    def fit_tafel_and_plateau(E, I, tmin, tmax, pmin, pmax):
-        tafel_mask = (E >= tmin) & (E <= tmax)
-        plateau_mask = (E >= pmin) & (E <= pmax)
-        E_tafel = E[tafel_mask]
-        I_tafel = I[tafel_mask]
-        logI_tafel = np.log10(np.abs(I_tafel)) if len(I_tafel) > 0 else None
-        E_plateau = E[plateau_mask]
-        I_plateau = np.abs(I[plateau_mask])
-        # Linear fit
-        slope, intercept, r, p, std = linregress(E_tafel, logI_tafel) if len(E_tafel) > 1 else (np.nan, np.nan, 0, 0, 0)
-        tafel_slope = 1/slope if slope else np.nan
-        I_lim = np.median(I_plateau) if len(I_plateau) > 0 else np.nan
-        log_Il = np.log10(I_lim) if I_lim > 0 else np.nan
-        E_corr = (log_Il - intercept) / slope if (slope and not np.isnan(log_Il)) else np.nan
-        return (E_tafel, slope, intercept, tafel_slope, r**2 if slope else 0), (E_plateau, I_lim), E_corr
+    st.info(f'Fitting with weighting: {W}% of the total fit weight is assigned to the region ±{w_ac} V around Ecorr (as in van Ede & Angst 2022, CORROSION).')
 
-    # -- Fit set A
-    (E_tafel_A, slope_A, intercept_A, tafs_A, r2A), (E_plt_A, I_lim_A), Ecorr_A = fit_tafel_and_plateau(E_clean, I_clean, tafel_min_A, tafel_max_A, plateau_min_A, plateau_max_A)
-    # -- Fit set B
-    (E_tafel_B, slope_B, intercept_B, tafs_B, r2B), (E_plt_B, I_lim_B), Ecorr_B = fit_tafel_and_plateau(E_clean, I_clean, tafel_min_B, tafel_max_B, plateau_min_B, plateau_max_B)
+    try:
+        fit_result = Polcurve.mixed_pol_fit(
+            window,
+            apply_weight_distribution=True,
+            w_ac=w_ac,
+            W=W
+        )
+        [_, _], E_corr_fit, I_corr, anodic_slope, cathodic_slope, lim_current, r2, *_ = fit_result
 
-    # --- Overlay plot
-    fig, ax = plt.subplots()
-    ax.plot(E_clean, np.abs(I_clean), '-', c="blue", label="|I| observed")
-    # A
-    if len(E_tafel_A) > 1:
-        ax.plot(E_tafel_A, 10**(slope_A*E_tafel_A + intercept_A), 'r--', label=f"Tafel A (slope={tafs_A*1000:.1f})")
-    if len(E_plt_A) > 1:
-        ax.axhline(I_lim_A, color='green', linestyle='--', label='Plateau A')
-    if Ecorr_A and not np.isnan(Ecorr_A):
-        ax.axvline(Ecorr_A, color='purple', linestyle='-', label=f'$E_{{corr}}$ A: {Ecorr_A:.3f} V')
-    # B
-    if len(E_tafel_B) > 1:
-        ax.plot(E_tafel_B, 10**(slope_B*E_tafel_B + intercept_B), 'm:', label=f"Tafel B (slope={tafs_B*1000:.1f})")
-    if len(E_plt_B) > 1:
-        ax.axhline(I_lim_B, color='lime', linestyle=':', label='Plateau B')
-    if Ecorr_B and not np.isnan(Ecorr_B):
-        ax.axvline(Ecorr_B, color='orange', linestyle='-.', label=f'$E_{{corr}}$ B: {Ecorr_B:.3f} V')
-    ax.set_yscale('log')
-    ax.set_xlabel("Potential (V)")
-    ax.set_ylabel("|I| (A/m²)")
-    ax.set_title("Two Region Fits: $E_{corr}$ shift")
-    ax.legend()
-    st.pyplot(fig)
+        st.success("Weighted fit completed!")
+        st.write(f"- **E_corr:** {E_corr_fit:.4f} V")
+        st.write(f"- **I_corr:** {I_corr:.3e} A")
+        st.write(f"- **Anodic Tafel slope:** {anodic_slope*1000:.2f} mV/dec")
+        st.write(f"- **Cathodic Tafel slope:** {cathodic_slope*1000:.2f} mV/dec")
+        st.write(f"- **Limiting current (I_lim):** {lim_current:.3e} A")
 
-    st.markdown(f"""---
-    #### Results **A**
-    - Tafel region: {tafel_min_A:.3f} – {tafel_max_A:.3f} V (slope = {tafs_A*1000:.1f} mV/dec, R²={r2A:.3f})  
-    - Plateau region: {plateau_min_A:.3f} – {plateau_max_A:.3f} V (|I_lim|={I_lim_A:.2e} A)  
-    - $E_{{corr}}$ from fit A: **{Ecorr_A:.4f} V**
+        # Show the fit plot
+        Polcurve.plotting(output_folder=plot_output_folder)
+        st.markdown("### Fitted plot (with weighting):")
+        import matplotlib.pyplot as plt
+        for plot_file in sorted(os.listdir(plot_output_folder)):
+            if plot_file.lower().endswith(('.png', '.jpg', '.jpeg')):
+                plot_path = os.path.join(plot_output_folder, plot_file)
+                st.image(plot_path, caption=plot_file)
 
+        # R² on log(|I|) (for reporting)
+        E_fit = np.array(Polcurve.fit_results[1])
+        I_fit = np.array(Polcurve.fit_results[0])
+        I_pred = np.interp(E_clean, E_fit, I_fit)
+        I_obs = I_clean
+        mask2 = (np.abs(I_obs) > 0) & (np.abs(I_pred) > 0)
+        if np.sum(mask2) < 3:
+            st.warning("Not enough data after cleaning for R² calculation.")
+            r2_log = np.nan
+        else:
+            logI_obs = np.log10(np.abs(I_obs[mask2]))
+            logI_pred = np.log10(np.abs(I_pred[mask2]))
+            r2_log = 1 - np.sum((logI_obs - logI_pred) ** 2) / np.sum((logI_obs - np.mean(logI_obs)) ** 2)
+        st.write(f"- **Goodness of fit (R², log-I):** {r2_log:.4f}")
+
+    except Exception as fit_exc:
+        st.error(f"Fit failed: {fit_exc}")
+
+    st.markdown("""
     ---
-    #### Results **B**
-    - Tafel region: {tafel_min_B:.3f} – {tafel_max_B:.3f} V (slope = {tafs_B*1000:.1f} mV/dec, R²={r2B:.3f})  
-    - Plateau region: {plateau_min_B:.3f} – {plateau_max_B:.3f} V (|I_lim|={I_lim_B:.2e} A)  
-    - $E_{{corr}}$ from fit B: **{Ecorr_B:.4f} V**
-
-    ---
-    - **Visualize how different reasonable region choices shift $E_{{corr}}$.**
-    - If you want to see both overlays, plot with two colors and two lines.
+    **This app follows the weighting recommendations of van Ede & Angst (2022, CORROSION): the region near $E_{corr}$ is fit with higher weight, minimizing user subjectivity and improving fit robustness for real-world, non-ideal curves. Try different $w_{ac}$ and $W$ values to explore sensitivity.**
     """)
