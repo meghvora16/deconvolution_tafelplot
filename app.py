@@ -107,6 +107,24 @@ if uploaded_file is not None:
         result = Polcurve.mixed_pol_fit(window=window, apply_weight_distribution=True, w_ac=w_ac, W=W)
         [_, _], Ecorr, Icorr, anodic_slope, cathodic_slope, lim_current, r2, *_ = result
 
+        # --- R² calculation in log10(|i|) domain (best practice)
+        try:
+            fit_results = Polcurve.fit_results
+            I_model, E_model = np.array(fit_results[0]), np.array(fit_results[1])
+            from scipy.interpolate import interp1d
+            interp_log_model = interp1d(E_model, np.log10(np.abs(I_model/area_cm2)), bounds_error=False, fill_value="extrapolate")
+            logI_obs = np.log10(np.abs(i_fit))
+            logI_pred = interp_log_model(E_fit)
+            valid = np.isfinite(logI_obs) & np.isfinite(logI_pred)
+            logI_obs = logI_obs[valid]
+            logI_pred = logI_pred[valid]
+            if len(logI_obs) >= 2:
+                r2_log = 1 - np.sum((logI_obs - logI_pred) ** 2) / np.sum((logI_obs - np.mean(logI_obs)) ** 2)
+            else:
+                r2_log = np.nan
+        except Exception as ex:
+            r2_log = np.nan
+
         st.success("Fit completed! Tafel log plot below.")
         st.markdown(f"""
 - **Ecorr (corrosion potential, fit):** {Ecorr:.4f} V
@@ -114,7 +132,7 @@ if uploaded_file is not None:
 - **Anodic Tafel slope:** {anodic_slope*1000:.2f} mV/dec
 - **Cathodic Tafel slope:** {cathodic_slope*1000:.2f} mV/dec
 - **Limiting current (fit):** {lim_current:.3e} A
-- **R² (log|I|, fit quality):** {r2:.4f}
+- **R² (log10|i|, fit quality):** {r2_log:.4f}
 - **OCP (from data):** {OCP:.4f} V
 - **Δ(OCP - Ecorr):** {OCP - Ecorr:+.4f} V
 """)
@@ -123,17 +141,10 @@ if uploaded_file is not None:
 
         # -- Plot: log10(|i|) vs E with overlay in fit region
         fig, ax = plt.subplots(figsize=(6,4))
-        # All data
         ax.plot(E, np.log10(np.abs(i)), 'o', alpha=0.3, label='All data')
-        # Fit region data (in window)
         ax.plot(E_fit, np.log10(np.abs(i_fit)), 'ro', mfc='none', label='Fit region')
-        # Fit curve
-        Polcurve.plotting(output_folder=plot_output_folder)
-        # Get model curve for this window fit
         try:
-            fit_results = Polcurve.fit_results
-            I_model, E_model = fit_results[0], fit_results[1]
-            ax.plot(E_model, np.log10(np.abs(np.array(I_model)/area_cm2)), 'orange', linewidth=2, label='Fit (model)')
+            ax.plot(E_model, np.log10(np.abs(I_model/area_cm2)), 'orange', linewidth=2, label='Fit (model)')
         except Exception:
             st.warning("Could not plot fit overlay directly.")
         ax.set_xlabel("E [V vs Ref]")
