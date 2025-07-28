@@ -63,11 +63,6 @@ if uploaded_file is not None:
         st.error("Too few valid data points after cleaning. Check your file!")
         st.stop()
 
-    # --- OCP from data
-    idx_OCP = np.argmin(np.abs(I))
-    OCP = E[idx_OCP]
-    st.info(f"Open Circuit Potential (OCP, from data): {OCP:.4f} V (where |I| minimal)")
-
     # --- Initial fit to get Ecorr for slider reference
     Polcurve_preview = polcurvefit(E, I, sample_surface=area_cm2)
     Ecorr_preview = Polcurve_preview._find_Ecorr()
@@ -88,7 +83,7 @@ if uploaded_file is not None:
     I_fit = I[region_mask]
     i_fit = i[region_mask]
 
-    st.info(f"Fit window: {wmin:.3f} V to {wmax:.3f} V (absolute, shown in red on plot)")
+    st.info(f"Fit window: {wmin:.3f} V to {wmax:.3f} V (absolute, fit region shown in red on plot)")
 
     # --- Fit weights (user-adjustable)
     w_ac = st.slider("Weight for active (Tafel) region (w_ac)", 0.01, 0.20, 0.08, step=0.01, format="%.2f")
@@ -109,45 +104,4 @@ if uploaded_file is not None:
 
         st.success("Fit completed! Tafel log plot below.")
         st.markdown(f"""
-- **Ecorr (corrosion potential, fit):** {Ecorr:.4f} V
-- **Icorr (corrosion current, fit):** {Icorr:.3e} A
-- **Anodic Tafel slope:** {anodic_slope*1000:.2f} mV/dec
-- **Cathodic Tafel slope:** {cathodic_slope*1000:.2f} mV/dec
-- **Limiting current (fit):** {lim_current:.3e} A
-- **OCP (from data):** {OCP:.4f} V
-- **Δ(OCP - Ecorr):** {OCP - Ecorr:+.4f} V
-""")
-        if abs(OCP - Ecorr) > 0.025:
-            st.warning("OCP and Ecorr differ by >25 mV. Check data quality or window.")
-
-        # -- Plot: log10(|i|) vs E with overlay in fit region
-        fig, ax = plt.subplots(figsize=(6,4))
-        ax.plot(E, np.log10(np.abs(i)), 'o', alpha=0.3, label='All data')
-        ax.plot(E_fit, np.log10(np.abs(i_fit)), 'ro', mfc='none', label='Fit region')
-        try:
-            fit_results = Polcurve.fit_results
-            I_model, E_model = np.array(fit_results[0]), np.array(fit_results[1])
-            ax.plot(E_model, np.log10(np.abs(I_model/area_cm2)), 'orange', linewidth=2, label='Fit (model)')
-        except Exception:
-            st.warning("Could not plot fit overlay directly.")
-        ax.set_xlabel("E [V vs Ref]")
-        ax.set_ylabel("log10(|i|) (A/cm²)")
-        ax.set_title("Tafel Plot: log10(|i|) vs E (fit overlay)")
-        ax.legend()
-        ax.grid(True)
-        st.pyplot(fig)
-    except Exception as fit_exc:
-        st.error(f"Fit failed: {fit_exc}")
-
-st.markdown("""
----
-**How to get a good fit:**  
-- Select the window covering only the region where your plot is (locally) straight in log10(|i|) — typically ±0.10 to ±0.25 V around Ecorr, avoiding side/reverse/plateau regions.  
-- Tune the weights for your chemistry:  
-    - Lower W = less plateau influence  
-    - Higher w_ac = more Tafel slope influence  
-- Use the log plot overlay to judge quality — the model (orange) should follow the red fit-region points.
-- Adjust until your fit describes the most important region of your science.  
-
-All fit numbers, OCP, Ecorr, and log-plot overlays are provided for your record and publication.
-""")
+- **Ecorr (corrosion potential, fit, V):** {Ecorr
