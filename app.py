@@ -5,38 +5,11 @@ from scipy.stats import linregress
 import matplotlib.pyplot as plt
 import os
 
-st.title("Automatic Extraction: $E_{corr}$ from Activation & Diffusion Regions")
+st.title("Visualize $E_{corr}$ Shift from Two Fitting Regions")
 
 uploaded_file = st.file_uploader("Upload CSV or Excel (Potential, Current)", type=["csv", "xlsx"])
-plot_output_folder = 'Visualization_auto_regions'
+plot_output_folder = 'Visualization_ecorr_shift'
 os.makedirs(plot_output_folder, exist_ok=True)
-
-def find_best_linear_window(E, logI, wsize=15):
-    """Find the window of size wsize where logI vs E is most linear (highest R^2)."""
-    best_R2 = -np.inf
-    best_slope, best_intercept, best_start = 0, 0, 0
-    for i in range(len(E) - wsize + 1):
-        thisE = E[i:i+wsize]
-        thisLogI = logI[i:i+wsize]
-        slope, intercept, r, p, std = linregress(thisE, thisLogI)
-        if r**2 > best_R2:
-            best_R2 = r**2
-            best_slope = slope
-            best_intercept = intercept
-            best_start = i
-    return best_start, best_start+wsize, best_slope, best_intercept, best_R2
-
-def find_best_flat_window(E, I, wsize=15):
-    """Find the window of size wsize with the lowest std(|I|), i.e., flattest region."""
-    best_std = np.inf
-    best_start = 0
-    for i in range(len(E) - wsize + 1):
-        thisI = I[i:i+wsize]
-        stdv = np.std(thisI)
-        if stdv < best_std:
-            best_std = stdv
-            best_start = i
-    return best_start, best_start+wsize, best_std
 
 if uploaded_file is not None:
     if uploaded_file.name.endswith(".csv"):
@@ -52,56 +25,81 @@ if uploaded_file is not None:
     I = df[cur_col].values
 
     mask = (~np.isnan(E)) & (~np.isnan(I)) & (np.abs(I) > 0)
-    # always sort by potential for windowing
-    sorter = np.argsort(E)
-    E_clean = E[mask][sorter]
-    I_clean = I[mask][sorter]
+    E_clean = E[mask]
+    I_clean = I[mask]
+    N = len(E_clean)
 
-    logI_clean = np.log10(np.abs(I_clean))
+    st.markdown("#### Fitting region set **A** (Tafel & plateau):")
+    tafel_min_A = st.number_input('Tafel A min (V)', value=float(np.percentile(E_clean, 5)), key='taAmin')
+    tafel_max_A = st.number_input('Tafel A max (V)', value=float(np.percentile(E_clean, 25)), key='taAmax')
+    plateau_min_A = st.number_input('Plateau A min (V)', value=float(np.percentile(E_clean, 75)), key='paAmin')
+    plateau_max_A = st.number_input('Plateau A max (V)', value=float(np.percentile(E_clean, 98)), key='paAmax')
 
-    # ---- Auto-detect best Tafel region (max linear, size 15 points or 12.5% of data) ----
-    win_size = max(10, len(E_clean)//8)
-    t_start, t_end, slope, intercept, r2_tafel = find_best_linear_window(E_clean, logI_clean, wsize=win_size)
-    E_tafel = E_clean[t_start:t_end]
-    logI_tafel = logI_clean[t_start:t_end]
+    st.markdown("#### Fitting region set **B** (Tafel & plateau):")
+    tafel_min_B = st.number_input('Tafel B min (V)', value=float(np.percentile(E_clean, 10)), key='taBmin')
+    tafel_max_B = st.number_input('Tafel B max (V)', value=float(np.percentile(E_clean, 30)), key='taBmax')
+    plateau_min_B = st.number_input('Plateau B min (V)', value=float(np.percentile(E_clean, 80)), key='paBmin')
+    plateau_max_B = st.number_input('Plateau B max (V)', value=float(np.percentile(E_clean, 99)), key='paBmax')
 
-    tafel_slope = 1/slope if slope != 0 else np.inf  # V/dec
+    # ---- Helper for any region
+    def fit_tafel_and_plateau(E, I, tmin, tmax, pmin, pmax):
+        tafel_mask = (E >= tmin) & (E <= tmax)
+        plateau_mask = (E >= pmin) & (E <= pmax)
+        E_tafel = E[tafel_mask]
+        I_tafel = I[tafel_mask]
+        logI_tafel = np.log10(np.abs(I_tafel)) if len(I_tafel) > 0 else None
+        E_plateau = E[plateau_mask]
+        I_plateau = np.abs(I[plateau_mask])
+        # Linear fit
+        slope, intercept, r, p, std = linregress(E_tafel, logI_tafel) if len(E_tafel) > 1 else (np.nan, np.nan, 0, 0, 0)
+        tafel_slope = 1/slope if slope else np.nan
+        I_lim = np.median(I_plateau) if len(I_plateau) > 0 else np.nan
+        log_Il = np.log10(I_lim) if I_lim > 0 else np.nan
+        E_corr = (log_Il - intercept) / slope if (slope and not np.isnan(log_Il)) else np.nan
+        return (E_tafel, slope, intercept, tafel_slope, r**2 if slope else 0), (E_plateau, I_lim), E_corr
 
-    # ---- Auto-detect best plateau region (min std, size 15 points or 12.5% of data) ----
-    p_start, p_end, std_plateau = find_best_flat_window(E_clean, np.abs(I_clean), wsize=win_size)
-    E_plateau = E_clean[p_start:p_end]
-    I_plateau = np.abs(I_clean[p_start:p_end])
-    I_lim = np.median(I_plateau)
+    # -- Fit set A
+    (E_tafel_A, slope_A, intercept_A, tafs_A, r2A), (E_plt_A, I_lim_A), Ecorr_A = fit_tafel_and_plateau(E_clean, I_clean, tafel_min_A, tafel_max_A, plateau_min_A, plateau_max_A)
+    # -- Fit set B
+    (E_tafel_B, slope_B, intercept_B, tafs_B, r2B), (E_plt_B, I_lim_B), Ecorr_B = fit_tafel_and_plateau(E_clean, I_clean, tafel_min_B, tafel_max_B, plateau_min_B, plateau_max_B)
 
-    # -- Ecorr as intersection (Tafel line with log10(I_lim))
-    log_Il = np.log10(I_lim)
-    E_corr_auto = (log_Il - intercept) / slope if slope != 0 else np.nan
-
-    # --- Outputs
-    st.success(f"Auto Tafel region: {E_tafel[0]:.3f}–{E_tafel[-1]:.3f} V, slope={tafel_slope*1000:.2f} mV/dec, R²={r2_tafel:.3f}")
-    st.success(f"Auto Plateau region: {E_plateau[0]:.3f}–{E_plateau[-1]:.3f} V, median I_lim={I_lim:.3e} A")
-    st.success(f"Automated $E_{{corr}}$: {E_corr_auto:.4f} V")
-
-    # --- Display overlay plot
+    # --- Overlay plot
     fig, ax = plt.subplots()
     ax.plot(E_clean, np.abs(I_clean), '-', c="blue", label="|I| observed")
-    ax.plot(E_tafel, 10**(slope*E_tafel + intercept), 'r--', label=f"Tafel fit (auto)")
-    ax.axhline(I_lim, color='green', linestyle='--', label='Auto plateau (I_lim)')
-    if not np.isnan(E_corr_auto):
-        ax.axvline(E_corr_auto, color='purple', linestyle='-.', label='$E_{corr}$ (auto)')
+    # A
+    if len(E_tafel_A) > 1:
+        ax.plot(E_tafel_A, 10**(slope_A*E_tafel_A + intercept_A), 'r--', label=f"Tafel A (slope={tafs_A*1000:.1f})")
+    if len(E_plt_A) > 1:
+        ax.axhline(I_lim_A, color='green', linestyle='--', label='Plateau A')
+    if Ecorr_A and not np.isnan(Ecorr_A):
+        ax.axvline(Ecorr_A, color='purple', linestyle='-', label=f'$E_{{corr}}$ A: {Ecorr_A:.3f} V')
+    # B
+    if len(E_tafel_B) > 1:
+        ax.plot(E_tafel_B, 10**(slope_B*E_tafel_B + intercept_B), 'm:', label=f"Tafel B (slope={tafs_B*1000:.1f})")
+    if len(E_plt_B) > 1:
+        ax.axhline(I_lim_B, color='lime', linestyle=':', label='Plateau B')
+    if Ecorr_B and not np.isnan(Ecorr_B):
+        ax.axvline(Ecorr_B, color='orange', linestyle='-.', label=f'$E_{{corr}}$ B: {Ecorr_B:.3f} V')
     ax.set_yscale('log')
     ax.set_xlabel("Potential (V)")
     ax.set_ylabel("|I| (A/m²)")
-    ax.set_title("Auto region selection: Tafel, Plateau, $E_{corr}$")
+    ax.set_title("Two Region Fits: $E_{corr}$ shift")
     ax.legend()
     st.pyplot(fig)
 
-    st.markdown(f"Best Tafel region values: {E_tafel[0]:.3f} – {E_tafel[-1]:.3f} V, slope {tafel_slope*1000:.2f} mV/dec, R² {r2_tafel:.3f}")
-    st.markdown(f"Best plateau (diffusion) region: {E_plateau[0]:.3f} – {E_plateau[-1]:.3f} V, median |I_lim| = {I_lim:.3e} A")
-    st.markdown(f"Computed intersection $E_{{corr}}$ = {E_corr_auto:.4f} V")
+    st.markdown(f"""---
+    #### Results **A**
+    - Tafel region: {tafel_min_A:.3f} – {tafel_max_A:.3f} V (slope = {tafs_A*1000:.1f} mV/dec, R²={r2A:.3f})  
+    - Plateau region: {plateau_min_A:.3f} – {plateau_max_A:.3f} V (|I_lim|={I_lim_A:.2e} A)  
+    - $E_{{corr}}$ from fit A: **{Ecorr_A:.4f} V**
 
-    st.markdown("""
     ---
-    **This app auto-detects and fits the regions in your polarization curve most likely to represent the activation (Tafel) and diffusion (plateau) processes.
-    It overlays both regimes and shows $E_{corr}$ from their intersection, with no manual selection.**
+    #### Results **B**
+    - Tafel region: {tafel_min_B:.3f} – {tafel_max_B:.3f} V (slope = {tafs_B*1000:.1f} mV/dec, R²={r2B:.3f})  
+    - Plateau region: {plateau_min_B:.3f} – {plateau_max_B:.3f} V (|I_lim|={I_lim_B:.2e} A)  
+    - $E_{{corr}}$ from fit B: **{Ecorr_B:.4f} V**
+
+    ---
+    - **Visualize how different reasonable region choices shift $E_{{corr}}$.**
+    - If you want to see both overlays, plot with two colors and two lines.
     """)
