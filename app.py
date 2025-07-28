@@ -106,15 +106,3 @@ if uploaded_file is not None:
 
     except Exception as fit_exc:
         st.error(f"Fit failed: {fit_exc}")
-
-st.markdown("""
----
-**How this works:**
-- Uses your potential/current columns directly.
-- Normalizes by area for true current density (editable above).
-- OCP is taken from the point closest to zero current.
-- Ecorr, Icorr, slopes, and R² are extracted from automated, hard-coded-window mixed-control fit.
-- All weighting and fit region are set in the script (edit the lines with `window_vs_Ecorr`, `w_ac`, `W`).
-- Plots show your measured and fitted polarization.
-
-**Tip:** If the fit is not ideal, try changing these three lines in the script for fine-tuning:
