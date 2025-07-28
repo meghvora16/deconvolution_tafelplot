@@ -4,4 +4,4 @@ streamlit
 matplotlib
 scipy
 openpyxl
-polcurvefit
+polcurvefit 0.3.0
