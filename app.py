@@ -11,13 +11,7 @@ except ImportError:
     st.error("polcurvefit is not installed. Please run 'pip install polcurvefit'")
     st.stop()
 
-st.title("Smart Mixed-Control Polarization Curve Fit (Tafel Overlay — Interactive Region and Weight Tuning)")
-
-st.markdown("""
-Upload your polarization curve data (CSV or Excel, columns: 'Potential applied (V)', 'WE(1).Current (A)').
-You can interactively select a fitting window and weights for a physically meaningful, high-quality fit!
-The plot shows **log10(|i|) vs E** (true Tafel plot) so you can overlay observed and fit curves clearly.
-""")
+st.title("Mixed-Control Polarization Curve Fit")
 
 uploaded_file = st.file_uploader(
     "Upload a CSV or Excel file (columns: 'Potential applied (V)', 'WE(1).Current (A)')",
@@ -132,13 +126,3 @@ if uploaded_file is not None:
     except Exception as fit_exc:
         st.error(f"Fit failed: {fit_exc}")
 
-st.markdown("""
----
-**How to get a good fit:**  
-- Select a window covering only the region where your plot is (locally) straight in log10(|i|) — typically ±0.10 to ±0.25 V around Ecorr, avoiding side/reverse/plateau regions.
-- Tune the weights for your chemistry:  
-    - Lower W = less plateau influence  
-    - Higher w_ac = more Tafel slope influence  
-- Use the log plot overlay to judge quality — the model (orange) should follow the red fit-region points.
-- Adjust until your fit describes the most important region of your science.  
-""")
