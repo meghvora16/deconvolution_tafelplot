@@ -44,7 +44,7 @@ if uploaded_file is not None:
         area_cm2 = st.number_input('Sample surface area (cm²)', min_value=0.0001, value=1.0)
         area_m2 = area_cm2 * 1e-4
 
-        # Instatiate fitting object
+        # Instantiate fitting object
         Polcurve = polcurvefit(E, I, sample_surface=area_m2)
         st.info("Fitting whole curve (activation + diffusion regions) to physics-based model...")
 
@@ -71,7 +71,16 @@ if uploaded_file is not None:
         st.write(f"- **Anodic Tafel slope:** {anodic_slope*1000:.2f} mV/dec")
         st.write(f"- **Cathodic Tafel slope:** {cathodic_slope*1000:.2f} mV/dec")
         st.write(f"- **Limiting current (I_lim):** {lim_current:.3e} A")
-        st.write(f"- **Goodness of fit (R²):** {r2:.4f}")
+
+        # ------ NEW: Standard R² calculation ------
+        import numpy as np
+        E_fit = np.array(Polcurve.fit_results[1])
+        I_fit = np.array(Polcurve.fit_results[0])
+        I_pred = np.interp(E, E_fit, I_fit)
+        I_obs = I
+        r2_true = 1 - np.sum((I_obs - I_pred) ** 2) / np.sum((I_obs - np.mean(I_obs)) ** 2)
+        st.write(f"- **Goodness of fit (R², standard regression):** {r2_true:.4f}")
+        # ------------------------------------------
 
         # Save and display plots
         try:
