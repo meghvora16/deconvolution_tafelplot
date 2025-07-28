@@ -9,7 +9,7 @@ except ImportError:
     st.error("polcurvefit class not found. Please make sure 'polcurvefit.py' is in your app folder or the package is installed.")
     st.stop()
 
-st.title("Robust Automated Mixed-Control Tafel Fit (with bulletproof initial guesses)")
+st.title("Robust Automated Mixed-Control Tafel Fit (Safe initial guesses)")
 
 uploaded_file = st.file_uploader(
     "Upload CSV or Excel (potential in one column, current in another)", 
@@ -46,39 +46,45 @@ if uploaded_file is not None:
         E_clean = E[mask]
         I_clean = I[mask]
 
-        # Initialize polcurvefit instance
-        Polcurve = polcurvefit(E_clean, I_clean, sample_surface=area_m2)
+        # Check for enough points and calculate robust initial guesses
+        if len(I_clean) < 5:
+            st.error("Not enough valid (nonzero) points for fitting. Check your data window and file.")
+            st.stop()
 
-        # Automatic window: Ecorr ± 0.6 V
+        abs_Iclean = np.abs(I_clean)
+        i_min = np.min(abs_Iclean)
+        i_max = np.max(abs_Iclean)
+        if np.isclose(i_min, i_max, rtol=1e-6, atol=1e-12):
+            i_corr_guess = i_min * 1.1
+            i_L_guess = i_min * 1.2
+            if i_corr_guess == i_L_guess:
+                i_L_guess = i_corr_guess * 1.1
+        else:
+            delta = (i_max - i_min)
+            i_corr_guess = i_min + delta * 0.2
+            i_L_guess   = i_min + delta * 0.8
+            if not (i_min < i_corr_guess < i_max):
+                i_corr_guess = (i_min*0.9 + i_max*1.1)/2
+            if not (i_min < i_L_guess < i_max):
+                i_L_guess = (i_min*1.1 + i_max*0.9)/2
+
+        # Log all diagnostics
+        st.info(f"Initial guess: i_corr={i_corr_guess:.3e}, i_L={i_L_guess:.3e}, min={i_min:.3e}, max={i_max:.3e}")
+
+        # Initialize polcurvefit instance and auto window
+        Polcurve = polcurvefit(E_clean, I_clean, sample_surface=area_m2)
         e_corr = Polcurve._find_Ecorr()
         wwin = 0.6
         window = [-wwin, +wwin]
-
-        # Safe, robust initial guesses INSIDE bounds
-        eps = 1e-6
-        abs_Iclean = np.abs(I_clean)
-        i_min = np.min(abs_Iclean[abs_Iclean > 0])
-        i_max = np.max(abs_Iclean)
-        if i_max <= i_min + eps:
-            # Degenerate data (all currents almost equal), fudge
-            i_corr_guess = i_min * 1.05
-            i_L_guess = i_min * 1.15
-        else:
-            i_corr_guess = i_min + 0.2 * (i_max - i_min)
-            i_L_guess = i_min + 0.8 * (i_max - i_min)
-        # Absolutely INSIDE bounds
-        i_corr_guess = max(i_min + eps, min(i_corr_guess, i_max - eps))
-        i_L_guess = max(i_min + eps, min(i_L_guess, i_max - eps))
-
-        st.info(f"Fitting Ecorr ±{wwin} V window. Weighted fit near Ecorr, robust initial values.")
+        st.info(f"Fitting Ecorr ±{wwin} V window. Weighted fit near Ecorr.")
 
         fit_result = Polcurve.mixed_pol_fit(
             window,
             i_corr_guess=i_corr_guess,
             i_L_guess=i_L_guess,
             apply_weight_distribution=True,
-            w_ac=0.04,  # width around Ecorr with extra weight (V)
-            W=80        # percent weight in window
+            w_ac=0.04,   # width around Ecorr with extra weight (V)
+            W=80         # percent weight in window
         )
         [_, _], E_corr, I_corr, anodic_slope, cathodic_slope, lim_current, r2, *_ = fit_result
 
@@ -91,7 +97,7 @@ if uploaded_file is not None:
         st.write(f"- **Cathodic Tafel slope:** {cathodic_slope*1000:.2f} mV/dec")
         st.write(f"- **Limiting current (I_lim):** {lim_current:.3e} A")
 
-        # Log-scale R² calculation
+        # Goodness-of-fit on log-current scale
         E_fit = np.array(Polcurve.fit_results[1])
         I_fit = np.array(Polcurve.fit_results[0])
         I_pred = np.interp(E_clean, E_fit, I_fit)
@@ -129,5 +135,5 @@ if uploaded_file is not None:
 
 st.markdown("""
 ---
-**This app fits your polarization curve using a window and weighting scheme that focuses on the main Tafel/diffusion region, using absolutely robust initial guesses (never out-of-bounds). If fit is still non-optimal, further model refinement or more advanced pre-processing may be needed.**
+**This app fits your polarization curve using a window and weighting scheme that focuses on the main Tafel/diffusion region, using bulletproof initial guesses (never out-of-bounds). If fit is still non-optimal, or if you see a fitting error, check your data: all currents may be equal, or your selected columns may not contain valid data.**
 """)
