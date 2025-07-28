@@ -15,8 +15,9 @@ except ImportError:
 st.title("Mixed-Control Polarization Curve Fit (van Ede & Angst algorithm)")
 
 st.markdown("""
-This app analyzes your polarization curve **without human bias**, using the algorithm of van Ede & Angst (Cem. Concr. Res. 2023).  
-*Just upload your data and get Ecorr, Icorr, Tafel slopes, limiting current, and publication-ready plots. No manual window selection required!*
+This app analyzes your polarization curve using the **automated, human-minimized algorithm** of van Ede & Angst (2023, Cement and Concrete Research).
+Just upload your data, set the area, and get Ecorr, Icorr, Tafel slopes, limiting current, and publication-ready plots.  
+**No manual window selection!**
 """)
 
 uploaded_file = st.file_uploader(
@@ -47,7 +48,7 @@ if uploaded_file is not None:
             st.error(f"Missing column '{col}'! Found: {df.columns.tolist()}")
             st.stop()
 
-    st.write("**Data preview** (first 20 rows):")
+    st.write("**Data preview (first 20 rows):**")
     st.dataframe(df[[pot_col, cur_col]].head(20))
 
     # --- Area input
@@ -69,9 +70,11 @@ if uploaded_file is not None:
     OCP = E[idx_OCP]
     st.info(f"Open Circuit Potential (OCP, from data): {OCP:.4f} V (point with |I| minimal)")
 
-    # --- Automated mixed-control fit as per van Ede & Angst (no window!):
+    # --- Automated mixed-control fit as per van Ede & Angst: fit the whole region
     Polcurve = polcurvefit(E, I, sample_surface=area_cm2)
-    result = Polcurve.mixed_pol_fit(window=None, apply_weight_distribution=True)  # <-- algorithm chooses region
+    e_corr = Polcurve._find_Ecorr()
+    window = [np.min(E) - e_corr, np.max(E) - e_corr]  # use full range (minimizes human factors)
+    result = Polcurve.mixed_pol_fit(window=window, apply_weight_distribution=True)
 
     [_, _], Ecorr, Icorr, anodic_slope, cathodic_slope, lim_current, r2, *_ = result
 
@@ -101,9 +104,9 @@ if uploaded_file is not None:
 
 st.markdown("""
 ----
-**How it works:**  
-- Uses the van Ede & Angst (2023) algorithm for polarization curve fitting under mixed activation-diffusion control  
-- No manual window selection (minimizes human bias as in the paper)
+**How this works:**  
+- Uses the van Ede & Angst (2023) algorithm (no manual window selection)
+- Analyzes the full curve region, minimizes human bias  
 - Fitted Icorr, Ecorr, slopes, limiting current, and plots are all exported  
-- Full details: see [original paper](https://www.sciencedirect.com/science/article/pii/S0008884623001869) and [polcurvefit](https://github.com/uleangst/polcurvefit)
+- See [the paper](https://www.sciencedirect.com/science/article/pii/S0008884623001869) and [polcurvefit documentation](https://github.com/uleangst/polcurvefit)
 """)
