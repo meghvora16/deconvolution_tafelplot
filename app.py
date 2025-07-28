@@ -53,8 +53,8 @@ if uploaded_file is not None:
     # For instance, window = [-0.08, 0.08] would select -80 mV to +80 mV around Ecorr.
     window_vs_Ecorr = [-0.10, 0.10]  #  -100 to +100 mV around Ecorr
     
-    w_ac = 0.10   # Typical: 0.05 to 0.15 (increase to focus more on Tafel region)
-    W = 20        # Typical: 10 to 50 (lower = less weight to plateau/limiting, higher = more)
+    w_ac = 0.07   # Typical: 0.05 to 0.15 (increase to focus more on Tafel region)
+    W = 75        # Typical: 10 to 50 (lower = less weight to plateau/limiting, higher = more)
 
     st.info(f"Hard-coded fit window: [{window_vs_Ecorr[0]:.3f}, {window_vs_Ecorr[1]:.3f}] V around Ecorr ({e_corr:.3f} V)")
     st.info(f"Hard-coded weighting: w_ac={w_ac}, W={W}")
