@@ -9,10 +9,10 @@ except ImportError:
     st.error("polcurvefit class not found. Please make sure 'polcurvefit.py' is in your app folder or the package is installed.")
     st.stop()
 
-st.title("Zero-Hassle Mixed-Control Tafel Fit")
+st.title("Global Mixed-Control Tafel Fit (Fits Linear + Diffusion Region)")
 
 uploaded_file = st.file_uploader(
-    "Upload CSV or Excel (potential in one column, current in another)", 
+    "Upload CSV or Excel (first col Potential, one col Current)", 
     type=["csv", "xlsx"]
 )
 plot_output_folder = 'Visualization_mixed_control_fit'
@@ -27,13 +27,13 @@ if uploaded_file is not None:
         st.error("Unsupported file format.")
         st.stop()
 
-    st.write(df.head())
-
     # --- HARDCODED COLUMN NAMES for your data ---
     pot_col = 'Potential applied (V)'
     cur_col = 'WE(1).Current (A)'
     E = df[pot_col].values
     I = df[cur_col].values
+
+    st.write(df[[pot_col, cur_col]].head(20))
 
     area_cm2 = st.number_input('Sample surface area (cm²)', min_value=0.0001, value=1.0)
     area_m2 = area_cm2 * 1e-4
@@ -45,13 +45,12 @@ if uploaded_file is not None:
 
     Polcurve = polcurvefit(E_clean, I_clean, sample_surface=area_m2)
     e_corr = Polcurve._find_Ecorr()
-    wwin = 0.6
-    window = [-wwin, +wwin]
 
-    st.info(f"Fitting Ecorr ±{wwin} V window with default guesses (no initial guesses passed to fit).")
+    # -- *** FIT WINDOW: ENTIRE POTENTIAL RANGE *** --
+    window = [np.min(E_clean) - e_corr, np.max(E_clean) - e_corr]
+    st.info(f"Fitting entire window: [{window[0]:.3f}, {window[1]:.3f}] V around Ecorr.")
 
     try:
-        # THIS LINE: no guess arguments! (let polcurvefit do defaults)
         fit_result = Polcurve.mixed_pol_fit(
             window,
             apply_weight_distribution=True,
@@ -95,3 +94,8 @@ if uploaded_file is not None:
 
     except Exception as fit_exc:
         st.error(f"Fit failed: {fit_exc}")
+
+st.markdown("""
+---
+**This app fits your entire polarization curve using the full model (activation+diffusion/plateau regions) in one step. If the plateau is visible in your data, you will see it fitted. For advanced multi-process fitting, consult a corrosion analyst or use data containing both Tafel and limiting branches.**
+""")
