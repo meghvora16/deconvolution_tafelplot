@@ -5,4 +5,4 @@ streamlit
 matplotlib
 scipy
 openpyxl
-PolCurveFit
+git+https://github.com/mevaneede/polcurvefit.git
