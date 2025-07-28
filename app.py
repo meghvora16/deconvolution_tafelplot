@@ -1,3 +1,4 @@
+import numpy as np
 import streamlit as st
 import pandas as pd
 import os
@@ -8,7 +9,7 @@ except ImportError:
     st.error("polcurvefit class not found. Please make sure 'polcurvefit.py' is in your app folder or the package is installed.")
     st.stop()
 
-st.title("Automated Mixed-Control Tafel Fit (Activation + Diffusion)")
+st.title("Improved Automated Tafel Fit (weighted & auto-windowed)")
 
 uploaded_file = st.file_uploader(
     "Upload CSV or Excel (potential in one column, current in another)", 
@@ -19,7 +20,6 @@ os.makedirs(plot_output_folder, exist_ok=True)
 
 if uploaded_file is not None:
     try:
-        # Load file
         if uploaded_file.name.endswith(".csv"):
             df = pd.read_csv(uploaded_file)
         elif uploaded_file.name.endswith(".xlsx"):
@@ -37,45 +37,58 @@ if uploaded_file is not None:
         E = df[potential_col].values
         I = df[current_col].values
 
-        # Surface area input
-        st.markdown("**Surface area affects Icorr and Ilim. In cm². Default is 1 cm².**")
+        st.markdown("**Surface area affects Icorr and Ilim. Default is 1 cm².**")
         area_cm2 = st.number_input('Sample surface area (cm²)', min_value=0.0001, value=1.0)
         area_m2 = area_cm2 * 1e-4
 
-        # Clean: remove zero/NaN values to avoid log(0)
-        import numpy as np
+        # Clean input
         mask = (np.abs(I) > 0) & (~np.isnan(I)) & (~np.isnan(E))
         E_clean = E[mask]
         I_clean = I[mask]
 
-        # Initialize polcurvefit with all cleaned data
+        # Initialize object
         Polcurve = polcurvefit(E_clean, I_clean, sample_surface=area_m2)
-        st.info("Fitting whole curve (activation + diffusion regions) automatically...")
 
-        # Try both methods; use entire data span as window if needed
-        fit_result = None
-        if hasattr(Polcurve, "active_diff_pol_fit"):
+        # Automatic window: Ecorr +/- wwin (e.g. 0.6 V)
+        e_corr = Polcurve._find_Ecorr()
+        wwin = 0.6
+        window = [ -wwin, +wwin ]
+
+        # Weight more around Ecorr
+        st.info("Fitting region weighted around Ecorr ±{:.2f} V...".format(wwin))
+
+        # Use robust initial guesses
+        i_corr_guess = np.percentile(np.abs(I_clean), 50)
+        i_L_guess = np.percentile(np.abs(I_clean), 95)
+
+        # Try the weighted fit WITH a reasonable window and weighting, if supported
+        if hasattr(Polcurve, "mixed_pol_fit"):
+            fit_result = Polcurve.mixed_pol_fit(
+                window,
+                i_corr_guess = i_corr_guess,
+                i_L_guess = i_L_guess,
+                apply_weight_distribution = True, # WEIGHT key region
+                w_ac = 0.04,  # Width of region with extra weight (in V around Ecorr)
+                W = 80        # % weight assigned to this region (try 75–90)
+            )
+            [_, _], E_corr, I_corr, anodic_slope, cathodic_slope, lim_current, r2, *_ = fit_result
+        elif hasattr(Polcurve, "active_diff_pol_fit"):
             fit_result = Polcurve.active_diff_pol_fit()
             popt, E_corr, I_corr, anodic_slope, cathodic_slope, lim_current, r2 = fit_result
-        elif hasattr(Polcurve, "mixed_pol_fit"):
-            e_corr_loc = Polcurve._find_Ecorr()
-            wmin, wmax = min(E_clean) - e_corr_loc, max(E_clean) - e_corr_loc
-            fit_result = Polcurve.mixed_pol_fit([wmin, wmax])
-            [_, _], E_corr, I_corr, anodic_slope, cathodic_slope, lim_current, r2, *_ = fit_result
         else:
             st.error("No global mixed-control fitting method found in your polcurvefit install.")
             st.stop()
 
-        st.success("Automated global fit completed!")
+        st.success("Weighted, windowed fit completed!")
 
-        st.markdown("### Results (from global fit):")
+        st.markdown("### Results (from improved fit):")
         st.write(f"- **E_corr:** {E_corr:.4f} V")
         st.write(f"- **I_corr:** {I_corr:.3e} A")
         st.write(f"- **Anodic Tafel slope:** {anodic_slope*1000:.2f} mV/dec")
         st.write(f"- **Cathodic Tafel slope:** {cathodic_slope*1000:.2f} mV/dec")
         st.write(f"- **Limiting current (I_lim):** {lim_current:.3e} A")
 
-        # Correct log-scale R² calculation
+        # Log-scale R² calculation
         E_fit = np.array(Polcurve.fit_results[1])
         I_fit = np.array(Polcurve.fit_results[0])
         I_pred = np.interp(E_clean, E_fit, I_fit)
@@ -113,5 +126,5 @@ if uploaded_file is not None:
 
 st.markdown("""
 ---
-**This app fits your *entire* polarization curve using a model that separates activation (Tafel) and diffusion effects as in standard global Tafel analysis—automatically, with no window or manual region selection. Goodness-of-fit R² is reported on the log-current scale.**
+**This app fits your *entire* polarization curve using a window and weighting scheme that down-weights outlier/border regions and focuses on the main Tafel/diffusion zone. If fit is still non-optimal, further model refinement or more advanced pre-processing may be needed.**
 """)
