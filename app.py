@@ -5,10 +5,10 @@ from scipy.stats import linregress
 import matplotlib.pyplot as plt
 import os
 
-st.title("POLFIT-Style Separate Region Fitting: Tafel & Diffusion Control")
+st.title("Visualizing $E_{corr}$: Tafel (activation) vs. Plateau (diffusion) Fitting")
 
-uploaded_file = st.file_uploader("Upload CSV or Excel (Potential & Current)", type=["csv", "xlsx"])
-plot_output_folder = 'Visualization_piecewise_fit'
+uploaded_file = st.file_uploader("Upload CSV or Excel (Potential, Current)", type=["csv", "xlsx"])
+plot_output_folder = 'Visualization_Ecorr_regions'
 os.makedirs(plot_output_folder, exist_ok=True)
 
 if uploaded_file is not None:
@@ -24,86 +24,75 @@ if uploaded_file is not None:
     E = df[pot_col].values
     I = df[cur_col].values
 
-    st.write("First few points:", df[[pot_col, cur_col]].head())
-
-    # Remove zeros/NaNs
     mask = (~np.isnan(E)) & (~np.isnan(I)) & (np.abs(I) > 0)
     E_clean = E[mask]
     I_clean = I[mask]
 
-    # Show plots to guide region choice
-    st.write("Log plot (select fitting regions below):")
+    st.write("Choose regions with sliders below (guided by log plot):")
     fig, ax = plt.subplots()
     ax.plot(E_clean, np.abs(I_clean), '-', c="blue", label="|I|")
     ax.set_yscale('log')
     ax.set_xlabel("Potential (V)")
-    ax.set_ylabel("|I| (A/m²)")
+    ax.set_ylabel("|I| [A/m²]")
     ax.set_title("Log(|I|) vs E")
     st.pyplot(fig)
 
-    # --- User-select or default region for Tafel (linear) region
-    st.write("### Tafel region selection (for log-linear activation branch fit)")
-    tafel_min, tafel_max = st.select_slider(
-        "Select potential region for Tafel fit",
-        options=np.round(E_clean, 5),
-        value=(round(E_clean[10], 5), round(E_clean[len(E_clean)//3], 5))
-    )
+    st.write("### Tafel region (log-linear activation region) for fit:")
+    tafel_min = st.number_input('Tafel region: Minimum potential', value=float(np.percentile(E_clean, 5)))
+    tafel_max = st.number_input('Tafel region: Maximum potential', value=float(np.percentile(E_clean, 25)))
 
+    st.write("### Plateau (diffusion) region for fit:")
+    plateau_min = st.number_input('Plateau region: Minimum potential', value=float(np.percentile(E_clean, 75)))
+    plateau_max = st.number_input('Plateau region: Maximum potential', value=float(np.percentile(E_clean, 98)))
+
+    # --- Fit Tafel region (linear, log(|I|))
     tafel_mask = (E_clean >= tafel_min) & (E_clean <= tafel_max)
     E_tafel = E_clean[tafel_mask]
-    logI_tafel = np.log10(np.abs(I_clean[tafel_mask]))
+    I_tafel = I_clean[tafel_mask]
+    logI_tafel = np.log10(np.abs(I_tafel))
 
-    if len(E_tafel) < 2:
-        st.warning("Not enough points selected for Tafel fit.")
-    else:
+    show_fit = False
+    if len(E_tafel) >= 2:
+        # Linear fit in Tafel region
         slope, intercept, r, p, std = linregress(E_tafel, logI_tafel)
-        tafel_slope = 1/slope
-        tafel_label = f'Tafel fit slope: {tafel_slope*1000:.2f} mV/dec'
-        st.write(f"**Tafel region:** from {tafel_min:.3f} V to {tafel_max:.3f} V")
-        st.write(f"**Tafel slope:** {tafel_slope*1000:.2f} mV/dec")
-        st.write(f"**R²:** {r**2:.3f}")
+        tafel_slope = 1/slope  # V/dec
+        show_fit = True
 
-    # --- User-select region for plateau/limiting current region
-    st.write("### Plateau (diffusion) region selection")
-    plateau_min, plateau_max = st.select_slider(
-        "Select potential region for plateau fit",
-        options=np.round(E_clean, 5),
-        value=(round(E_clean[-len(E_clean)//6], 5), round(E_clean[-5], 5))
-    )
+    # --- Plateau region fit (mean/median)
     plateau_mask = (E_clean >= plateau_min) & (E_clean <= plateau_max)
-    I_plateau = np.abs(I_clean[plateau_mask])
+    E_plateau = E_clean[plateau_mask]
+    I_plateau = I_clean[plateau_mask]
+    I_lim = np.median(np.abs(I_plateau))
 
-    if len(I_plateau) < 2:
-        st.warning("Not enough points selected for plateau/limiting current fit.")
-    else:
-        ilim_mean = np.mean(I_plateau)
-        ilim_median = np.median(I_plateau)
-        st.write(f"**Plateau region:** from {plateau_min:.3f} V to {plateau_max:.3f} V")
-        st.write(f"**Limiting current (mean):** {ilim_mean:.3e} A")
-        st.write(f"**Limiting current (median):** {ilim_median:.3e} A")
-    
-    # --- Show results overlayed on plot
+    # -- Find Ecorr as intersection of linear (logI= slope*E+intercept) and plateau (logIl)
+    if show_fit:
+        log_Il = np.log10(I_lim)
+        # Solve for E: slope*E + intercept = log_Il  =>  E = (log_Il - intercept) / slope
+        E_corr_tafel_vs_plateau = (log_Il - intercept) / slope
+        st.success(f"Intersection $E_{{corr}}$ (Tafel/Plateau): {E_corr_tafel_vs_plateau:.4f} V")
+        st.write(f"Tafel slope: {tafel_slope*1000:.2f} mV/dec")
+        st.write(f"R²(Tafel fit): {r**2:.3f}")
+        st.write(f"Limiting current (plateau): {I_lim:.3e} A")
+
+    # -- Plot all
     fig2, ax2 = plt.subplots()
     ax2.plot(E_clean, np.abs(I_clean), '-', c="blue", label="|I| observed")
-    if len(E_tafel) >= 2:
-        ax2.plot(E_tafel, 10**(slope*E_tafel + intercept), 'r--', label=tafel_label)
-    if len(I_plateau) >= 2:
-        ax2.axhline(ilim_median, color='green', linestyle='--', label='Limiting current median')
+    if show_fit:
+        E_line = np.linspace(tafel_min, tafel_max, 100)
+        ax2.plot(E_line, 10**(slope*E_line + intercept), 'r--', label="Tafel fit (activation)")
+        ax2.axhline(I_lim, color='green', linestyle='--', label='Plateau (diffusion) median')
+        ax2.axvline(E_corr_tafel_vs_plateau, color='purple', linestyle='-.', label='$E_{corr}$ (Tafel/Plateau intersection)')
     ax2.set_yscale('log')
     ax2.set_xlabel("Potential (V)")
     ax2.set_ylabel("|I| (A/m²)")
-    ax2.set_title("Piecewise POLFIT-region fitting")
+    ax2.set_title("Activation vs Diffusion Region: $E_{corr}$ visualization")
     ax2.legend()
     st.pyplot(fig2)
-
-    # Save output
-    outpath = os.path.join(plot_output_folder, "piecewise_polfit.png")
-    fig2.savefig(outpath)
-    st.markdown(f"Image saved: {outpath}")
+    plt.savefig(os.path.join(plot_output_folder, "activation_vs_diffusion_Ecorr.png"))
 
     st.markdown("""
     ---
-    **This app mimics POLFIT and recommended literature practice: you select (by inspection or algorithm) the physical regions corresponding to the Tafel (activation) and limiting current (diffusion) regimes.
-    Each region is fit using the appropriate model (linear for log(|I|) in Tafel region, mean in plateau region).
-    This approach ensures the values you use/report are physically meaningful - which is not generally true of global fits for real data!**
+    **You can now see the $E_{corr}$ as found either by the full Tafel/activation region fit,
+    by the intersection with the plateau region, and how different segments of the curve give
+    different $E_{corr}$ values.**
     """)
