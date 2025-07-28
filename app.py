@@ -1,19 +1,39 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+from scipy.stats import linregress
+import matplotlib.pyplot as plt
 import os
 
-try:
-    from polcurvefit import polcurvefit
-except ImportError:
-    st.error("polcurvefit is not installed. Please ensure polcurvefit.py or the package is present.")
-    st.stop()
-
-st.title("Weighted Automated Fit à la van Ede & Angst (2022)")
+st.title("Automatic Highlighting: Activation (Tafel) vs. Diffusion Regions")
 
 uploaded_file = st.file_uploader("Upload CSV or Excel (Potential, Current)", type=["csv", "xlsx"])
-plot_output_folder = 'Visualization_weighted_fit'
+plot_output_folder = 'Visualization_region_highlight'
 os.makedirs(plot_output_folder, exist_ok=True)
+
+def find_best_linear_window(E, logI, wsize=15):
+    """Find window (size wsize) of maximum linearity logI vs E (max R^2)."""
+    best_R2 = -np.inf
+    best_start = 0
+    for i in range(len(E) - wsize + 1):
+        winE, winlogI = E[i:i+wsize], logI[i:i+wsize]
+        slope, intercept, r, *_ = linregress(winE, winlogI)
+        if r**2 > best_R2:
+            best_R2 = r**2
+            best_start = i
+    return best_start, best_start + wsize
+
+def find_best_flat_window(E, I, wsize=15):
+    """Find window (size wsize) where |I| is flattest (min std)."""
+    best_std = np.inf
+    best_start = 0
+    for i in range(len(E) - wsize + 1):
+        winI = I[i:i+wsize]
+        stdv = np.std(winI)
+        if stdv < best_std:
+            best_std = stdv
+            best_start = i
+    return best_start, best_start + wsize
 
 if uploaded_file is not None:
     if uploaded_file.name.endswith(".csv"):
@@ -29,67 +49,45 @@ if uploaded_file is not None:
     I = df[cur_col].values
 
     mask = (~np.isnan(E)) & (~np.isnan(I)) & (np.abs(I) > 0)
-    E_clean = E[mask]
-    I_clean = I[mask]
+    sorter = np.argsort(E)
+    E_clean = E[mask][sorter]
+    I_clean = I[mask][sorter]
+    logI_clean = np.log10(np.abs(I_clean))
 
-    area_cm2 = st.number_input('Sample surface area (cm²)', min_value=0.0001, value=1.0)
-    area_m2 = area_cm2 * 1e-4
+    # Window size: adjustable or default
+    wsize = st.number_input('Window size (points to consider per region)', min_value=5, max_value=min(80, len(E_clean)//2), value=max(15, len(E_clean)//12), step=1)
 
-    # Parameters as in van Ede & Angst (see Suppl. Info for recommended values)
-    w_ac = st.number_input("Width of high-weight region around $E_{corr}$ (V)", value=0.04, min_value=0.001, max_value=1.0, step=0.01, format="%.3f")
-    W = st.number_input("Weight percentage in $w_{ac}$ region (%)", value=80, min_value=10, max_value=100, step=5)
-    
-    Polcurve = polcurvefit(E_clean, I_clean, sample_surface=area_m2)
-    e_corr = Polcurve._find_Ecorr()
-    # Use the full available data span relative to Ecorr
-    window = [np.min(E_clean) - e_corr, np.max(E_clean) - e_corr]
+    # Activation (Tafel) region: most linear window in logI vs E
+    t_start, t_end = find_best_linear_window(E_clean, logI_clean, wsize=wsize)
+    E_tafel, logI_tafel = E_clean[t_start:t_end], logI_clean[t_start:t_end]
+    slope, intercept, r, *_ = linregress(E_tafel, logI_tafel)
 
-    st.info(f'Fitting with weighting: {W}% of the total fit weight is assigned to the region ±{w_ac} V around Ecorr (as in van Ede & Angst 2022, CORROSION).')
+    # Plateau (diffusion) region: flattest window in |I|
+    p_start, p_end = find_best_flat_window(E_clean, np.abs(I_clean), wsize=wsize)
+    E_plateau, I_plateau = E_clean[p_start:p_end], np.abs(I_clean)[p_start:p_end]
 
-    try:
-        fit_result = Polcurve.mixed_pol_fit(
-            window,
-            apply_weight_distribution=True,
-            w_ac=w_ac,
-            W=W
-        )
-        [_, _], E_corr_fit, I_corr, anodic_slope, cathodic_slope, lim_current, r2, *_ = fit_result
+    # -- Plot: colored regions
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.plot(E_clean, np.abs(I_clean), '-', c="0.75", label="|I| data (all)")
+    # Highlight activation region
+    ax.plot(E_tafel, 10**(slope*E_tafel + intercept), 'r-', lw=2, label="Tafel linear fit (activation region)")
+    ax.fill_between(E_tafel, np.min(np.abs(I_clean)), np.max(np.abs(I_clean)), color='red', alpha=0.15, label="Activation (Tafel) region")
+    # Highlight plateau region
+    ax.hlines(np.median(I_plateau), np.min(E_plateau), np.max(E_plateau), color='green', linestyle='--', label="Plateau (lim. current) region")
+    ax.fill_between(E_plateau, np.min(I_plateau), np.max(I_plateau), color='green', alpha=0.10, label="Diffusion region")
+    # Cosmetic
+    ax.set_yscale('log')
+    ax.set_xlabel("Potential (V)")
+    ax.set_ylabel("|I| (A/m²)")
+    ax.set_title("Activation (Tafel, RED) vs Diffusion/Plateau (GREEN) regions, auto-found")
+    ax.legend()
+    st.pyplot(fig)
 
-        st.success("Weighted fit completed!")
-        st.write(f"- **E_corr:** {E_corr_fit:.4f} V")
-        st.write(f"- **I_corr:** {I_corr:.3e} A")
-        st.write(f"- **Anodic Tafel slope:** {anodic_slope*1000:.2f} mV/dec")
-        st.write(f"- **Cathodic Tafel slope:** {cathodic_slope*1000:.2f} mV/dec")
-        st.write(f"- **Limiting current (I_lim):** {lim_current:.3e} A")
-
-        # Show the fit plot
-        Polcurve.plotting(output_folder=plot_output_folder)
-        st.markdown("### Fitted plot (with weighting):")
-        import matplotlib.pyplot as plt
-        for plot_file in sorted(os.listdir(plot_output_folder)):
-            if plot_file.lower().endswith(('.png', '.jpg', '.jpeg')):
-                plot_path = os.path.join(plot_output_folder, plot_file)
-                st.image(plot_path, caption=plot_file)
-
-        # R² on log(|I|) (for reporting)
-        E_fit = np.array(Polcurve.fit_results[1])
-        I_fit = np.array(Polcurve.fit_results[0])
-        I_pred = np.interp(E_clean, E_fit, I_fit)
-        I_obs = I_clean
-        mask2 = (np.abs(I_obs) > 0) & (np.abs(I_pred) > 0)
-        if np.sum(mask2) < 3:
-            st.warning("Not enough data after cleaning for R² calculation.")
-            r2_log = np.nan
-        else:
-            logI_obs = np.log10(np.abs(I_obs[mask2]))
-            logI_pred = np.log10(np.abs(I_pred[mask2]))
-            r2_log = 1 - np.sum((logI_obs - logI_pred) ** 2) / np.sum((logI_obs - np.mean(logI_obs)) ** 2)
-        st.write(f"- **Goodness of fit (R², log-I):** {r2_log:.4f}")
-
-    except Exception as fit_exc:
-        st.error(f"Fit failed: {fit_exc}")
+    st.markdown(f"**Activation (Tafel) region:** {E_tafel[0]:.3f} V – {E_tafel[-1]:.3f} V (slope {1/slope*1000:.2f} mV/dec, R²={r**2:.3f})")
+    st.markdown(f"**Diffusion/plateau region:** {E_plateau[0]:.3f} V – {E_plateau[-1]:.3f} V (median |I_lim|={np.median(I_plateau):.3e} A)")
 
     st.markdown("""
     ---
-    **This app follows the weighting recommendations of van Ede & Angst (2022, CORROSION): the region near $E_{corr}$ is fit with higher weight, minimizing user subjectivity and improving fit robustness for real-world, non-ideal curves. Try different $w_{ac}$ and $W$ values to explore sensitivity.**
+    **RED = activation (Tafel/linear) region; GREEN = plateau (diffusion-limited) region.  
+    Regions are detected automatically (just like in van Ede & Angst 2022, POLFIT, and modern analysis).**
     """)
